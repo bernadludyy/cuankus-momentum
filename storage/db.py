@@ -96,6 +96,21 @@ def init_db() -> None:
         """
     )
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS daily_filter_cache (
+            ticker TEXT PRIMARY KEY,
+            volume_ma_short REAL,
+            volume_ma_long REAL,
+            volume_ma_ratio REAL,
+            value_ma REAL,
+            history_days INTEGER NOT NULL,
+            enough_history INTEGER NOT NULL,
+            ts TEXT NOT NULL
+        )
+        """
+    )
+
     # Seed state from historical alerts so an existing signal is not re-alerted
     # immediately after this stateful alert logic is deployed.
     cur.execute(
@@ -332,6 +347,90 @@ def save_market_cap(ticker: str, market_cap: float) -> None:
             ts = excluded.ts
         """,
         (ticker.upper(), float(market_cap), now_wib_iso()),
+    )
+    con.commit()
+    con.close()
+
+
+
+def get_cached_daily_filter(
+    ticker: str,
+    max_age_hours: int = 18,
+) -> dict[str, Any] | None:
+    cutoff = datetime.now(WIB) - timedelta(hours=max_age_hours)
+
+    con = connect()
+    row = con.execute(
+        """
+        SELECT
+            volume_ma_short,
+            volume_ma_long,
+            volume_ma_ratio,
+            value_ma,
+            history_days,
+            enough_history,
+            ts
+        FROM daily_filter_cache
+        WHERE ticker = ?
+        """,
+        (ticker.upper(),),
+    ).fetchone()
+    con.close()
+
+    if not row:
+        return None
+
+    try:
+        cached_at = datetime.fromisoformat(row["ts"])
+        if cached_at < cutoff:
+            return None
+    except Exception:
+        return None
+
+    return {
+        "volume_ma_short": row["volume_ma_short"],
+        "volume_ma_long": row["volume_ma_long"],
+        "volume_ma_ratio": row["volume_ma_ratio"],
+        "value_ma": row["value_ma"],
+        "history_days": int(row["history_days"]),
+        "enough_history": bool(row["enough_history"]),
+    }
+
+
+def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
+    con = connect()
+    con.execute(
+        """
+        INSERT INTO daily_filter_cache (
+            ticker,
+            volume_ma_short,
+            volume_ma_long,
+            volume_ma_ratio,
+            value_ma,
+            history_days,
+            enough_history,
+            ts
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(ticker) DO UPDATE SET
+            volume_ma_short = excluded.volume_ma_short,
+            volume_ma_long = excluded.volume_ma_long,
+            volume_ma_ratio = excluded.volume_ma_ratio,
+            value_ma = excluded.value_ma,
+            history_days = excluded.history_days,
+            enough_history = excluded.enough_history,
+            ts = excluded.ts
+        """,
+        (
+            ticker.upper(),
+            metrics.get("volume_ma_short"),
+            metrics.get("volume_ma_long"),
+            metrics.get("volume_ma_ratio"),
+            metrics.get("value_ma"),
+            int(metrics.get("history_days") or 0),
+            1 if metrics.get("enough_history") else 0,
+            now_wib_iso(),
+        ),
     )
     con.commit()
     con.close()
