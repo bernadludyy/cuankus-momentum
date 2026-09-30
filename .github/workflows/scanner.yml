@@ -51,6 +51,20 @@ jobs:
           BIG_PRINT_MIN_LOT: "500"
         run: python test_microstructure.py
 
+      - name: Daily MA filter smoke test
+        if: github.event_name == 'workflow_dispatch' && inputs.run_tests
+        env:
+          ZPI_API_KEY: ${{ secrets.ZPI_API_KEY }}
+          ZPI_BASE_URL: https://api.zapi.ink/v1/finance:pluang
+          ZPI_IDX_BASE_URL: https://api.zapi.ink/v1/finance:idx
+          DAILY_FILTER_ENABLED: "true"
+          VOLUME_MA_SHORT: "10"
+          VOLUME_MA_LONG: "100"
+          VOLUME_MA_RATIO_MIN: "2.0"
+          VALUE_MA_WINDOW: "5"
+          MIN_VALUE_MA_IDR: "500000000"
+        run: python test_daily_filter.py
+
       - name: Telegram delivery smoke test
         if: github.event_name == 'workflow_dispatch' && inputs.run_tests
         env:
