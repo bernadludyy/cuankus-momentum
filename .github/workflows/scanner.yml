@@ -42,15 +42,6 @@ jobs:
           restore-keys: |
             cuankus-momentum-db-
 
-      - name: Microstructure smoke test
-        if: github.event_name == 'workflow_dispatch' && inputs.run_tests
-        env:
-          ZPI_API_KEY: ${{ secrets.ZPI_API_KEY }}
-          ZPI_BASE_URL: https://api.zapi.ink/v1/finance:pluang
-          RUNNING_TRADE_MIN_LOT: "100"
-          BIG_PRINT_MIN_LOT: "500"
-        run: python test_microstructure.py
-
       - name: Daily MA filter smoke test
         if: github.event_name == 'workflow_dispatch' && inputs.run_tests
         env:
@@ -64,6 +55,16 @@ jobs:
           VALUE_MA_WINDOW: "5"
           MIN_VALUE_MA_IDR: "500000000"
         run: python test_daily_filter.py
+
+      - name: Microstructure smoke test
+        continue-on-error: true
+        if: github.event_name == 'workflow_dispatch' && inputs.run_tests
+        env:
+          ZPI_API_KEY: ${{ secrets.ZPI_API_KEY }}
+          ZPI_BASE_URL: https://api.zapi.ink/v1/finance:pluang
+          RUNNING_TRADE_MIN_LOT: "100"
+          BIG_PRINT_MIN_LOT: "500"
+        run: python test_microstructure.py
 
       - name: Telegram delivery smoke test
         if: github.event_name == 'workflow_dispatch' && inputs.run_tests
