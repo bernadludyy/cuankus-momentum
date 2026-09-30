@@ -19,8 +19,20 @@ from config import (
     MAX_MARKET_CAP_IDR,
     MARKET_CAP_CACHE_HOURS,
     MAX_ALERT_PRICE,
+    DAILY_FILTER_ENABLED,
+    DAILY_FILTER_CACHE_HOURS,
+    STOCK_HISTORY_LENGTH,
+    VOLUME_MA_SHORT,
+    VOLUME_MA_LONG,
+    VOLUME_MA_RATIO_MIN,
+    VALUE_MA_WINDOW,
+    MIN_VALUE_MA_IDR,
     TOP_MOVER_COUNT,
     USE_MULTI_QUOTE,
+)
+from scanner.daily_filters import (
+    compute_daily_filter_metrics,
+    daily_filter_is_eligible,
 )
 from scanner.engine import (
     analyze_ticker,
@@ -34,13 +46,16 @@ from scanner.market_data import (
     extract_market_cap,
     fetch_multi_quote,
     fetch_quote,
+    fetch_stock_history,
 )
 from scanner.market_hours import is_idx_market_window
 from scanner.microstructure import apply_micro_confirmation, fetch_microstructure
 from scanner.normalizer import extract_quotes, normalize_quote
 from storage.db import (
+    get_cached_daily_filter,
     get_cached_market_cap,
     init_db,
+    save_daily_filter,
     save_market_cap,
     save_snapshot,
 )
@@ -102,6 +117,10 @@ def format_market_cap(value) -> str:
     if value >= 1e6:
         return f"Rp{value / 1e6:.2f}M"
     return f"Rp{value:,.0f}"
+
+
+def format_rupiah_compact(value) -> str:
+    return format_market_cap(value)
 
 
 def get_market_cap(ticker: str) -> float | None:
@@ -167,13 +186,73 @@ def prepare_market_cap_candidate(result: dict) -> bool:
     return eligible
 
 
+def get_daily_filter_metrics(ticker: str) -> dict:
+    cached = get_cached_daily_filter(
+        ticker,
+        max_age_hours=DAILY_FILTER_CACHE_HOURS,
+    )
+    if cached is not None:
+        return cached
+
+    raw = fetch_stock_history(
+        ticker,
+        length=STOCK_HISTORY_LENGTH,
+    )
+    metrics = compute_daily_filter_metrics(raw)
+    save_daily_filter(ticker, metrics)
+    return metrics
+
+
+def prepare_daily_filter_candidate(result: dict) -> bool:
+    if not DAILY_FILTER_ENABLED:
+        return True
+
+    if result.get("_daily_filter_checked"):
+        return bool(result.get("_daily_filter_eligible"))
+
+    ticker = result["ticker"]
+
+    try:
+        metrics = get_daily_filter_metrics(ticker)
+    except Exception as exc:
+        metrics = None
+        print(f"[WARN] daily filter {ticker} gagal: {exc}")
+
+    eligible = daily_filter_is_eligible(metrics)
+
+    if metrics:
+        result["volume_ma_short"] = metrics.get("volume_ma_short")
+        result["volume_ma_long"] = metrics.get("volume_ma_long")
+        result["volume_ma_ratio"] = metrics.get("volume_ma_ratio")
+        result["value_ma"] = metrics.get("value_ma")
+        result["history_days"] = metrics.get("history_days")
+        result["enough_history"] = metrics.get("enough_history")
+
+    result["_daily_filter_checked"] = True
+    result["_daily_filter_eligible"] = eligible
+
+    if not eligible:
+        print(
+            f"[DAILY-FILTER-SKIP] {ticker}: "
+            f"VolMA{VOLUME_MA_SHORT}/MA{VOLUME_MA_LONG}="
+            f"{format_num(result.get('volume_ma_ratio'), 'x')} "
+            f"need>={VOLUME_MA_RATIO_MIN:.2f}x; "
+            f"ValueMA{VALUE_MA_WINDOW}="
+            f"{format_rupiah_compact(result.get('value_ma'))} "
+            f"need>{format_rupiah_compact(MIN_VALUE_MA_IDR)}; "
+            f"history={result.get('history_days', 0)}"
+        )
+
+    return eligible
+
+
 def add_eligible_from_pool(
     selected: list[dict],
     selected_tickers: set[str],
     pool: list[dict],
     limit: int,
 ) -> int:
-    """Fill up to limit slots with price + market-cap eligible tickers."""
+    """Fill slots only with price, market-cap, and daily-filter eligible tickers."""
     added = 0
 
     for result in pool:
@@ -193,6 +272,9 @@ def add_eligible_from_pool(
             continue
 
         if not prepare_market_cap_candidate(result):
+            continue
+
+        if not prepare_daily_filter_candidate(result):
             continue
 
         selected.append(result)
@@ -227,7 +309,9 @@ def format_alert(result: dict) -> str:
         f"Leakage: {result['leakage_score']}/100\n"
         f"Momentum: {result['momentum_score']}/100\n"
         f"Ignition: {format_num(result.get('ignition_score'), '/100')}\n"
-        f"Market Cap: {format_market_cap(result.get('market_cap'))}\n\n"
+        f"Market Cap: {format_market_cap(result.get('market_cap'))}\n"
+        f"Vol MA10/MA100: {format_num(result.get('volume_ma_ratio'), 'x')}\n"
+        f"Value MA5: {format_rupiah_compact(result.get('value_ma'))}\n\n"
         f"Daily: {format_num(result.get('daily_change_pct'), '%')}\n"
         f"Interval: {format_num(result.get('interval_return_pct'), '%')}\n"
         f"Volume: {format_num(result.get('volume_spike'), 'x')}\n"
@@ -482,6 +566,17 @@ def run_once() -> None:
                 f"[MARKET-CAP-SKIP] {ticker}: "
                 f"market_cap={format_market_cap(result.get('market_cap'))}"
             )
+            continue
+
+        if DAILY_FILTER_ENABLED and not daily_filter_is_eligible(
+            {
+                "volume_ma_ratio": result.get("volume_ma_ratio"),
+                "value_ma": result.get("value_ma"),
+                "history_days": result.get("history_days"),
+                "enough_history": result.get("enough_history"),
+            }
+        ):
+            print(f"[DAILY-FILTER-FINAL-SKIP] {ticker}")
             continue
 
         eligible_candidates.append(result)
