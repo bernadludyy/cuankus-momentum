@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 import re
+import time
 
 import requests
 
@@ -24,20 +25,66 @@ def _headers() -> dict[str, str]:
     }
 
 
+def _request_json(
+    url: str,
+    params: dict | None = None,
+    timeout: int = 30,
+    attempts: int = 3,
+) -> Any:
+    last_exc: Exception | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.get(
+                url,
+                headers=_headers(),
+                params=params or {},
+                timeout=timeout,
+            )
+
+            if response.status_code == 429 or response.status_code >= 500:
+                response.raise_for_status()
+
+            response.raise_for_status()
+            return response.json()
+
+        except (
+            requests.exceptions.SSLError,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.HTTPError,
+        ) as exc:
+            last_exc = exc
+
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            retryable_http = status is None or status == 429 or status >= 500
+
+            if attempt >= attempts or not retryable_http:
+                raise
+
+            wait_seconds = attempt
+            print(
+                f"[RETRY] API attempt {attempt}/{attempts} gagal "
+                f"({type(exc).__name__}); retry {wait_seconds}s..."
+            )
+            time.sleep(wait_seconds)
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("API request gagal tanpa exception detail")
+
+
 def _get(path: str, params: dict | None = None, timeout: int = 30) -> Any:
     validate_zpi_config()
 
     path = path.strip().lstrip("/")
     url = f"{ZPI_BASE_URL}/{path}"
 
-    response = requests.get(
+    return _request_json(
         url,
-        headers=_headers(),
-        params=params or {},
+        params=params,
         timeout=timeout,
     )
-    response.raise_for_status()
-    return response.json()
 
 
 def fetch_quote(ticker: str) -> Any:
@@ -62,14 +109,11 @@ def audit_endpoint(path: str, params: dict | None = None) -> Any:
 def _get_from_base(base_url: str, path: str, params: dict | None = None, timeout: int = 30) -> Any:
     validate_zpi_config()
     url = f"{base_url.rstrip('/')}/{path.strip().lstrip('/')}"
-    response = requests.get(
+    return _request_json(
         url,
-        headers=_headers(),
-        params=params or {},
+        params=params,
         timeout=timeout,
     )
-    response.raise_for_status()
-    return response.json()
 
 
 def fetch_top_movers(mover_type: str, count: int | None = None) -> Any:
