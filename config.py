@@ -63,7 +63,7 @@ MIN_MOMENTUM_INTERVAL_RETURN_PCT = float(
     os.getenv("MIN_MOMENTUM_INTERVAL_RETURN_PCT", "0.35")
 )
 
-_db_raw = os.getenv("DB_PATH", "data/powerfull_momentum.db")
+_db_raw = os.getenv("DB_PATH", "data/cuankus_momentum.db")
 DB_PATH = Path(_db_raw)
 if not DB_PATH.is_absolute():
     DB_PATH = BASE_DIR / DB_PATH
