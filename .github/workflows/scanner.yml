@@ -1,4 +1,4 @@
-name: Powerful Momentum Scanner
+name: Cuankus Momentum Scanner
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ on:
         default: false
         type: boolean
 concurrency:
-  group: powerful-momentum-scanner
+  group: cuankus-momentum-scanner
   cancel-in-progress: false
 
 jobs:
@@ -37,10 +37,10 @@ jobs:
       - name: Restore scanner DB
         uses: actions/cache/restore@v4
         with:
-          path: data/powerfull_momentum.db
-          key: powerful-momentum-db-${{ github.run_id }}
+          path: data/cuankus_momentum.db
+          key: cuankus-momentum-db-${{ github.run_id }}
           restore-keys: |
-            powerful-momentum-db-
+            cuankus-momentum-db-
 
       - name: Microstructure smoke test
         if: github.event_name == 'workflow_dispatch' && inputs.run_tests
@@ -114,12 +114,12 @@ jobs:
           MIN_BREAKOUT_PCT: "0.30"
           MIN_MOMENTUM_INTERVAL_RETURN_PCT: "0.35"
 
-          DB_PATH: data/powerfull_momentum.db
+          DB_PATH: data/cuankus_momentum.db
         run: python main.py
 
       - name: Save scanner DB
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: data/powerfull_momentum.db
-          key: powerful-momentum-db-${{ github.run_id }}
+          path: data/cuankus_momentum.db
+          key: cuankus-momentum-db-${{ github.run_id }}
