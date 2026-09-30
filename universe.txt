@@ -1,0 +1,7 @@
+# Universe awal untuk validasi deployment.
+# Satu ticker per baris.
+BBCA
+BBRI
+BMRI
+TLKM
+ASII
