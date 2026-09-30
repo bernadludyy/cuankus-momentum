@@ -164,6 +164,18 @@ def discover_active_tickers(count: int | None = None) -> list[str]:
     return list(dict.fromkeys(tickers))
 
 
+
+def fetch_stock_history(ticker: str, length: int = 120) -> Any:
+    """Fetch daily IDX history used by Bot 4 liquidity filters."""
+    return _get_from_base(
+        ZPI_IDX_BASE_URL,
+        "stock-history",
+        {
+            "code": ticker.upper().strip(),
+            "length": int(length),
+        },
+    )
+
 def fetch_orderbook(ticker: str) -> Any:
     return _get(
         "orderbook",
