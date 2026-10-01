@@ -22,6 +22,11 @@ from config import (
     DAILY_FILTER_ENABLED,
     DAILY_FILTER_CACHE_HOURS,
     STOCK_HISTORY_LENGTH,
+    SHAREHOLDER_FILTER_ENABLED,
+    MAX_SHAREHOLDERS,
+    SHAREHOLDER_CACHE_HOURS,
+    SHAREHOLDER_FAILURE_CACHE_HOURS,
+    SHAREHOLDER_ANNOUNCEMENT_LENGTH,
     VOLUME_MA_SHORT,
     VOLUME_MA_LONG,
     VOLUME_MA_RATIO_MIN,
@@ -51,14 +56,17 @@ from scanner.market_data import (
     fetch_stock_history,
 )
 from scanner.market_hours import is_idx_market_window
+from scanner.shareholder_filter import fetch_latest_shareholder_count
 from scanner.microstructure import apply_micro_confirmation, fetch_microstructure
 from scanner.normalizer import extract_quotes, normalize_quote
 from storage.db import (
     get_cached_daily_filter,
     get_cached_market_cap,
+    get_cached_shareholder_filter,
     init_db,
     save_daily_filter,
     save_market_cap,
+    save_shareholder_filter,
     save_snapshot,
 )
 
@@ -173,6 +181,79 @@ def price_is_eligible(price: float | None) -> bool:
     if price is None:
         return False
     return float(price) < MAX_ALERT_PRICE
+
+
+def shareholder_is_eligible(holder_count: int | None) -> bool:
+    if not SHAREHOLDER_FILTER_ENABLED:
+        return True
+    if holder_count is None:
+        return False
+    return int(holder_count) < MAX_SHAREHOLDERS
+
+
+def get_shareholder_metrics(ticker: str) -> dict:
+    cached = get_cached_shareholder_filter(
+        ticker,
+        success_max_age_hours=SHAREHOLDER_CACHE_HOURS,
+        failure_max_age_hours=SHAREHOLDER_FAILURE_CACHE_HOURS,
+    )
+    if cached is not None:
+        return cached
+
+    metrics = fetch_latest_shareholder_count(
+        ticker,
+        announcement_length=SHAREHOLDER_ANNOUNCEMENT_LENGTH,
+    )
+    save_shareholder_filter(
+        ticker,
+        holder_count=metrics.get("holder_count"),
+        report_published_at=metrics.get("report_published_at"),
+        announcement_id=metrics.get("announcement_id"),
+        source_url=metrics.get("source_url"),
+        status=str(metrics.get("status") or "UNKNOWN"),
+    )
+    return metrics
+
+
+def prepare_shareholder_candidate(result: dict) -> bool:
+    if not SHAREHOLDER_FILTER_ENABLED:
+        return True
+
+    if result.get("_shareholder_checked"):
+        return bool(result.get("_shareholder_eligible"))
+
+    ticker = result["ticker"]
+
+    try:
+        metrics = get_shareholder_metrics(ticker)
+    except Exception as exc:
+        metrics = {
+            "holder_count": None,
+            "report_published_at": None,
+            "announcement_id": None,
+            "source_url": None,
+            "status": f"ERROR:{type(exc).__name__}",
+        }
+        print(f"[WARN] shareholder filter {ticker} gagal: {exc}")
+
+    holder_count = metrics.get("holder_count")
+    eligible = shareholder_is_eligible(holder_count)
+
+    result["shareholder_count"] = holder_count
+    result["shareholder_report_published_at"] = metrics.get("report_published_at")
+    result["shareholder_status"] = metrics.get("status")
+    result["_shareholder_checked"] = True
+    result["_shareholder_eligible"] = eligible
+
+    if not eligible:
+        print(
+            f"[SHAREHOLDER-SKIP] {ticker}: "
+            f"holders={holder_count if holder_count is not None else '-'} "
+            f"need<{MAX_SHAREHOLDERS}; "
+            f"status={metrics.get('status')}"
+        )
+
+    return eligible
 
 
 def prepare_market_cap_candidate(result: dict) -> bool:
@@ -300,6 +381,9 @@ def add_eligible_from_pool(
         if not prepare_daily_filter_candidate(result):
             continue
 
+        if not prepare_shareholder_candidate(result):
+            continue
+
         selected.append(result)
         selected_tickers.add(ticker)
         added += 1
@@ -340,7 +424,11 @@ def format_alert(result: dict) -> str:
         f"Foreign Buy Dominance: "
         f"{format_num(result.get('foreign_buy_dominance_pct'), '%')}\n"
         f"Vol MA10/MA100: {format_num(result.get('volume_ma_ratio'), 'x')}\n"
-        f"Value MA5: {format_rupiah_compact(result.get('value_ma'))}\n\n"
+        f"Value MA5: {format_rupiah_compact(result.get('value_ma'))}\n"
+        f"Number of Shareholders: "
+        f"{int(result.get('shareholder_count')):,}"
+        if result.get("shareholder_count") is not None
+        else "Number of Shareholders: -\n"
         f"Daily: {format_num(result.get('daily_change_pct'), '%')}\n"
         f"Interval: {format_num(result.get('interval_return_pct'), '%')}\n"
         f"Volume: {format_num(result.get('volume_spike'), 'x')}\n"
