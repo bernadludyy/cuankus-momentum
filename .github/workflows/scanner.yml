@@ -42,6 +42,11 @@ jobs:
           restore-keys: |
             cuankus-momentum-db-
 
+      - name: Regression tests
+        run: |
+          python -m py_compile main.py scanner/*.py storage/*.py bot/*.py
+          python test_regressions.py
+
       - name: Daily MA filter smoke test
         if: github.event_name == 'workflow_dispatch' && inputs.run_tests
         env:
@@ -71,6 +76,7 @@ jobs:
           ZPI_API_KEY: ${{ secrets.ZPI_API_KEY }}
           ZPI_BASE_URL: https://api.zapi.ink/v1/finance:pluang
           RUNNING_TRADE_MIN_LOT: "100"
+          RUNNING_TRADE_MAX_AGE_MINUTES: "15"
           BIG_PRINT_MIN_LOT: "500"
         run: python test_microstructure.py
 
@@ -108,6 +114,7 @@ jobs:
           IGNITION_MAX_INTERVAL_RETURN_PCT: "1.50"
           IGNITION_MAX_DAILY_CHANGE_PCT: "4.0"
           RUNNING_TRADE_MIN_LOT: "100"
+          RUNNING_TRADE_MAX_AGE_MINUTES: "15"
           BIG_PRINT_MIN_LOT: "500"
           FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.force_run && 'true' || 'false' }}
           RECENT_SNAPSHOTS: "12"
