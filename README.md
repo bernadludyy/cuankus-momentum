@@ -21,3 +21,17 @@ hours to avoid repeated requests.
 
 Bot 3 remains unchanged. Bot 4 uses its own Telegram bot/group, database/cache,
 workflow identity, and cron trigger.
+
+
+## Core scanner fixes inherited from Bot 3
+
+- Breakout 0.0 is treated as valid data, not as missing.
+- PRE_MOMENTUM is evaluated ahead of EARLY_LEAKAGE after micro confirmation.
+- Two Ignition microstructure slots are genuinely reserved, then reclaimed if unused.
+- Re-arm state distinguishes NO_SIGNAL, PENDING_MICRO, NOT_EVALUATED, and API_FAILED.
+- Running-trade confirmation only uses prints from the latest 15 minutes.
+- Missing cumulative Frequency is backfilled from IDX stock-summary when available.
+- Regression tests run on every workflow execution.
+
+The shareholder hard filter remains disabled in the live workflow until its IDX-PDF
+smoke test succeeds reliably.
