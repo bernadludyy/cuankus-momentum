@@ -245,6 +245,20 @@ def fetch_stock_history(ticker: str, length: int = 120) -> Any:
         },
     )
 
+
+def fetch_company_announcements(ticker: str, length: int = 50) -> Any:
+    """Fetch IDX disclosures for one issuer via the existing ZAPI IDX proxy."""
+    return _get_from_base(
+        ZPI_IDX_BASE_URL,
+        "company-announcements",
+        {
+            "code": ticker.upper().strip(),
+            "length": int(length),
+            "start": 0,
+            "locale": "id",
+        },
+    )
+
 def fetch_orderbook(ticker: str) -> Any:
     return _get(
         "orderbook",
