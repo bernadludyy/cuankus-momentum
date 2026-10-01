@@ -17,6 +17,9 @@ from config import (
 )
 
 
+_LAST_STOCK_SUMMARY_BY_TICKER: dict[str, dict[str, Any]] = {}
+
+
 def _headers() -> dict[str, str]:
     validate_zpi_config()
     return {
@@ -157,7 +160,14 @@ def fetch_stock_summary(length: int = 5000) -> Any:
     )
 
 
+def get_stock_summary_row(ticker: str) -> dict[str, Any]:
+    row = _LAST_STOCK_SUMMARY_BY_TICKER.get(ticker.upper().strip())
+    return dict(row) if row else {}
+
+
 def discover_active_tickers(count: int | None = None) -> list[str]:
+    global _LAST_STOCK_SUMMARY_BY_TICKER
+
     """Temukan saham aktif dari seluruh ringkasan IDX.
 
     Ambil seluruh stock-summary lalu gabungkan Top N berdasarkan:
@@ -175,6 +185,21 @@ def discover_active_tickers(count: int | None = None) -> list[str]:
         rows = []
 
     rows = [row for row in rows if isinstance(row, dict)]
+
+    _LAST_STOCK_SUMMARY_BY_TICKER = {
+        str(
+            row.get("StockCode")
+            or row.get("Code")
+            or row.get("code")
+            or ""
+        ).upper().strip(): row
+        for row in rows
+        if (
+            row.get("StockCode")
+            or row.get("Code")
+            or row.get("code")
+        )
+    }
 
     if not rows:
         return []
