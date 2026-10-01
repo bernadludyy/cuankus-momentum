@@ -12,6 +12,11 @@ from config import (
 )
 
 
+def _gte(value: float | None, threshold: float) -> bool:
+    """Compare numeric values without treating 0.0 as missing."""
+    return value is not None and float(value) >= threshold
+
+
 def _scaled(value: float | None, low: float, high: float, points: float) -> float:
     if value is None:
         return 0.0
@@ -143,9 +148,11 @@ def classify_signal(
         knife_pass
         and extension_pass
         and momentum_score >= momentum_threshold
-        and (features.get("breakout_pct") or -999) >= MIN_BREAKOUT_PCT
-        and (features.get("interval_return_pct") or -999)
-            >= MIN_MOMENTUM_INTERVAL_RETURN_PCT
+        and _gte(features.get("breakout_pct"), MIN_BREAKOUT_PCT)
+        and _gte(
+            features.get("interval_return_pct"),
+            MIN_MOMENTUM_INTERVAL_RETURN_PCT,
+        )
     ):
         phase = "POWERFUL_MOMENTUM"
         score = momentum_score
