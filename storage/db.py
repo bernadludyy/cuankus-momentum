@@ -111,6 +111,20 @@ def init_db() -> None:
         """
     )
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shareholder_cache (
+            ticker TEXT PRIMARY KEY,
+            holder_count INTEGER,
+            report_published_at TEXT,
+            announcement_id TEXT,
+            source_url TEXT,
+            status TEXT NOT NULL,
+            ts TEXT NOT NULL
+        )
+        """
+    )
+
     # Seed state from historical alerts so an existing signal is not re-alerted
     # immediately after this stateful alert logic is deployed.
     cur.execute(
@@ -429,6 +443,102 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
             metrics.get("value_ma"),
             int(metrics.get("history_days") or 0),
             1 if metrics.get("enough_history") else 0,
+            now_wib_iso(),
+        ),
+    )
+    con.commit()
+    con.close()
+
+
+def get_cached_shareholder_filter(
+    ticker: str,
+    success_max_age_hours: int = 168,
+    failure_max_age_hours: int = 6,
+) -> dict[str, Any] | None:
+    con = connect()
+    row = con.execute(
+        """
+        SELECT
+            holder_count,
+            report_published_at,
+            announcement_id,
+            source_url,
+            status,
+            ts
+        FROM shareholder_cache
+        WHERE ticker = ?
+        """,
+        (ticker.upper(),),
+    ).fetchone()
+    con.close()
+
+    if not row:
+        return None
+
+    status = str(row["status"] or "UNKNOWN")
+    max_age_hours = (
+        success_max_age_hours
+        if status == "OK" and row["holder_count"] is not None
+        else failure_max_age_hours
+    )
+    cutoff = datetime.now(WIB) - timedelta(hours=max_age_hours)
+
+    try:
+        cached_at = datetime.fromisoformat(row["ts"])
+        if cached_at < cutoff:
+            return None
+    except Exception:
+        return None
+
+    return {
+        "holder_count": (
+            int(row["holder_count"])
+            if row["holder_count"] is not None
+            else None
+        ),
+        "report_published_at": row["report_published_at"],
+        "announcement_id": row["announcement_id"],
+        "source_url": row["source_url"],
+        "status": status,
+    }
+
+
+def save_shareholder_filter(
+    ticker: str,
+    holder_count: int | None,
+    report_published_at: str | None = None,
+    announcement_id: str | None = None,
+    source_url: str | None = None,
+    status: str = "OK",
+) -> None:
+    con = connect()
+    con.execute(
+        """
+        INSERT INTO shareholder_cache (
+            ticker,
+            holder_count,
+            report_published_at,
+            announcement_id,
+            source_url,
+            status,
+            ts
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(ticker) DO UPDATE SET
+            holder_count = excluded.holder_count,
+            report_published_at = excluded.report_published_at,
+            announcement_id = excluded.announcement_id,
+            source_url = excluded.source_url,
+            status = excluded.status,
+            ts = excluded.ts
+        """,
+        (
+            ticker.upper(),
+            int(holder_count) if holder_count is not None else None,
+            report_published_at,
+            announcement_id,
+            source_url,
+            status,
             now_wib_iso(),
         ),
     )
