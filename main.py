@@ -34,6 +34,7 @@ from scanner.daily_filters import (
     compute_daily_filter_metrics,
     daily_filter_is_eligible,
 )
+from scanner.foreign_score import build_foreign_metrics
 from scanner.engine import (
     analyze_ticker,
     mark_alerted,
@@ -46,6 +47,7 @@ from scanner.market_data import (
     extract_market_cap,
     fetch_multi_quote,
     fetch_quote,
+    get_stock_summary_row,
     fetch_stock_history,
 )
 from scanner.market_hours import is_idx_market_window
@@ -104,6 +106,27 @@ def format_num(value, suffix=""):
     if value is None:
         return "-"
     return f"{value:.2f}{suffix}"
+
+
+def format_shares(value) -> str:
+    if value is None:
+        return "-"
+    value = float(value)
+    sign = "+" if value > 0 else ""
+    absolute = abs(value)
+    if absolute >= 1e9:
+        return f"{sign}{value / 1e9:.2f}B"
+    if absolute >= 1e6:
+        return f"{sign}{value / 1e6:.2f}M"
+    if absolute >= 1e3:
+        return f"{sign}{value / 1e3:.2f}K"
+    return f"{sign}{value:.0f}"
+
+
+def format_signed_pct(value) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):+.2f}%"
 
 
 def format_market_cap(value) -> str:
@@ -310,6 +333,12 @@ def format_alert(result: dict) -> str:
         f"Momentum: {result['momentum_score']}/100\n"
         f"Ignition: {format_num(result.get('ignition_score'), '/100')}\n"
         f"Market Cap: {format_market_cap(result.get('market_cap'))}\n"
+        f"Foreign Score: {format_num(result.get('foreign_score'), '/100')} "
+        f"({result.get('foreign_status') or 'UNAVAILABLE'})\n"
+        f"Net Foreign: {format_shares(result.get('net_foreign_shares'))} shares\n"
+        f"Net Foreign Ratio: {format_signed_pct(result.get('net_foreign_ratio_pct'))}\n"
+        f"Foreign Buy Dominance: "
+        f"{format_num(result.get('foreign_buy_dominance_pct'), '%')}\n"
         f"Vol MA10/MA100: {format_num(result.get('volume_ma_ratio'), 'x')}\n"
         f"Value MA5: {format_rupiah_compact(result.get('value_ma'))}\n\n"
         f"Daily: {format_num(result.get('daily_change_pct'), '%')}\n"
@@ -429,6 +458,12 @@ def run_once() -> None:
         result = analyze_ticker(ticker)
         if not result:
             continue
+
+        result.update(
+            build_foreign_metrics(
+                get_stock_summary_row(ticker)
+            )
+        )
 
         analyzed.append(result)
 
