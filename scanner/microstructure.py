@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
 from config import (
@@ -24,8 +25,10 @@ from config import (
     PRE_MOMENTUM_MIN_POSITION_IN_RANGE,
     MIN_ACTIVITY_SPIKE,
     RUNNING_TRADE_MIN_LOT,
+    RUNNING_TRADE_MAX_AGE_MINUTES,
 )
 from scanner.market_data import fetch_orderbook, fetch_running_trades
+from scanner.market_hours import WIB
 
 
 def _unwrap(payload: Any) -> Any:
@@ -51,6 +54,10 @@ def _num(value: Any) -> float | None:
         return float(str(value).replace(",", "").strip())
     except (TypeError, ValueError):
         return None
+
+
+def _gte(value: float | None, threshold: float) -> bool:
+    return value is not None and float(value) >= threshold
 
 
 def _scaled(value: float | None, low: float, high: float, points: float) -> float:
@@ -110,23 +117,47 @@ def analyze_orderbook(payload: Any) -> dict[str, Any]:
     }
 
 
-def analyze_running_trades(payload: Any) -> dict[str, Any]:
+def _trade_age_minutes(time_text: Any, now: datetime | None = None) -> float | None:
+    if time_text is None:
+        return None
+    text = str(time_text).strip()
+    if not text:
+        return None
+    try:
+        trade_clock = datetime.strptime(text, "%H:%M:%S").time()
+    except ValueError:
+        return None
+    now = now or datetime.now(WIB)
+    now = now.replace(tzinfo=WIB) if now.tzinfo is None else now.astimezone(WIB)
+    trade_dt = datetime.combine(now.date(), trade_clock, tzinfo=WIB)
+    if trade_dt > now + timedelta(minutes=2):
+        trade_dt -= timedelta(days=1)
+    return (now - trade_dt).total_seconds() / 60.0
+
+
+def analyze_running_trades(payload: Any, max_age_minutes: int = RUNNING_TRADE_MAX_AGE_MINUTES) -> dict[str, Any]:
     data = _unwrap(payload)
     if not isinstance(data, dict):
         return {}
-
-    items = data.get("items") or []
-    items = [x for x in items if isinstance(x, dict)]
-
-    buy_lots = 0.0
-    sell_lots = 0.0
-    big_buy_lots = 0.0
-    big_sell_lots = 0.0
-
+    items = [x for x in (data.get("items") or []) if isinstance(x, dict)]
+    fresh_items, ages = [], []
+    stale_count = unknown_time_count = 0
+    now = datetime.now(WIB)
     for item in items:
+        age = _trade_age_minutes(item.get("time"), now=now)
+        if age is None or age < -2:
+            unknown_time_count += 1
+            continue
+        if age > max_age_minutes:
+            stale_count += 1
+            continue
+        fresh_items.append(item)
+        ages.append(max(age, 0.0))
+
+    buy_lots = sell_lots = big_buy_lots = big_sell_lots = 0.0
+    for item in fresh_items:
         lots = _num(item.get("lots")) or 0.0
         action = str(item.get("action") or "").upper()
-
         if action == "BUY":
             buy_lots += lots
             if lots >= BIG_PRINT_MIN_LOT:
@@ -138,19 +169,19 @@ def analyze_running_trades(payload: Any) -> dict[str, Any]:
 
     total_lots = buy_lots + sell_lots
     big_total = big_buy_lots + big_sell_lots
-
-    buy_ratio = buy_lots / total_lots if total_lots > 0 else None
-    big_buy_ratio = big_buy_lots / big_total if big_total > 0 else None
-
     return {
-        "trade_count": len(items),
+        "trade_count": len(fresh_items),
+        "raw_trade_count": len(items),
+        "stale_trade_count": stale_count,
+        "unknown_trade_time_count": unknown_time_count,
+        "latest_trade_age_minutes": min(ages) if ages else None,
         "buy_lots": buy_lots,
         "sell_lots": sell_lots,
         "net_aggressive_lots": buy_lots - sell_lots,
-        "aggressive_buy_ratio": buy_ratio,
+        "aggressive_buy_ratio": buy_lots / total_lots if total_lots > 0 else None,
         "big_buy_lots": big_buy_lots,
         "big_sell_lots": big_sell_lots,
-        "big_buy_ratio": big_buy_ratio,
+        "big_buy_ratio": big_buy_lots / big_total if big_total > 0 else None,
     }
 
 
@@ -263,29 +294,19 @@ def apply_micro_confirmation(result: dict[str, Any], micro: dict[str, Any]) -> d
     if (
         micro_confirmed
         and momentum >= MOMENTUM_THRESHOLD
-        and (result.get("breakout_pct") or -999) >= MIN_BREAKOUT_PCT
-        and (result.get("interval_return_pct") or -999)
-            >= MIN_MOMENTUM_INTERVAL_RETURN_PCT
+        and _gte(result.get("breakout_pct"), MIN_BREAKOUT_PCT)
+        and _gte(result.get("interval_return_pct"), MIN_MOMENTUM_INTERVAL_RETURN_PCT)
         and result.get("anti_falling_knife_pass")
         and result.get("not_overextended")
     ):
         phase = "POWERFUL_MOMENTUM"
         score = momentum
     elif (
-        micro_confirmed
-        and leakage >= LEAKAGE_THRESHOLD
-        and result.get("anti_falling_knife_pass")
-    ):
-        phase = "EARLY_LEAKAGE"
-        score = leakage
-    elif (
         micro_score >= PRE_MOMENTUM_MIN_MICRO_SCORE
         and momentum >= PRE_MOMENTUM_THRESHOLD
         and (result.get("activity_spike") or 0) >= MIN_ACTIVITY_SPIKE
-        and (result.get("interval_return_pct") or -999)
-            >= PRE_MOMENTUM_MIN_INTERVAL_RETURN_PCT
-        and (result.get("breakout_pct") or -999)
-            >= PRE_MOMENTUM_MIN_BREAKOUT_PCT
+        and _gte(result.get("interval_return_pct"), PRE_MOMENTUM_MIN_INTERVAL_RETURN_PCT)
+        and _gte(result.get("breakout_pct"), PRE_MOMENTUM_MIN_BREAKOUT_PCT)
         and (result.get("position_in_range") or 0)
             >= PRE_MOMENTUM_MIN_POSITION_IN_RANGE
         and (micro.get("aggressive_buy_ratio") or 0)
@@ -296,6 +317,13 @@ def apply_micro_confirmation(result: dict[str, Any], micro: dict[str, Any]) -> d
         phase = "PRE_MOMENTUM"
         score = momentum
         reasons.append("Momentum mulai terbentuk, belum full confirmation")
+    elif (
+        micro_confirmed
+        and leakage >= LEAKAGE_THRESHOLD
+        and result.get("anti_falling_knife_pass")
+    ):
+        phase = "EARLY_LEAKAGE"
+        score = leakage
     elif (
         ignition_score >= IGNITION_THRESHOLD
         and ignition_volume is not None
