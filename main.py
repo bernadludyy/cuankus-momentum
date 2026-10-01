@@ -116,6 +116,12 @@ def format_num(value, suffix=""):
     return f"{value:.2f}{suffix}"
 
 
+def format_shareholder_count(value) -> str:
+    if value is None:
+        return "-"
+    return f"{int(value):,}"
+
+
 def format_shares(value) -> str:
     if value is None:
         return "-"
@@ -356,7 +362,7 @@ def add_eligible_from_pool(
     pool: list[dict],
     limit: int,
 ) -> int:
-    """Fill slots only with price, market-cap, and daily-filter eligible tickers."""
+    """Fill slots only with price, market-cap, daily, and shareholder-eligible tickers."""
     added = 0
 
     for result in pool:
@@ -426,9 +432,7 @@ def format_alert(result: dict) -> str:
         f"Vol MA10/MA100: {format_num(result.get('volume_ma_ratio'), 'x')}\n"
         f"Value MA5: {format_rupiah_compact(result.get('value_ma'))}\n"
         f"Number of Shareholders: "
-        f"{int(result.get('shareholder_count')):,}"
-        if result.get("shareholder_count") is not None
-        else "Number of Shareholders: -\n"
+        f"{format_shareholder_count(result.get('shareholder_count'))}\n\n"
         f"Daily: {format_num(result.get('daily_change_pct'), '%')}\n"
         f"Interval: {format_num(result.get('interval_return_pct'), '%')}\n"
         f"Volume: {format_num(result.get('volume_spike'), 'x')}\n"
@@ -700,6 +704,15 @@ def run_once() -> None:
             }
         ):
             print(f"[DAILY-FILTER-FINAL-SKIP] {ticker}")
+            continue
+
+        if SHAREHOLDER_FILTER_ENABLED and not shareholder_is_eligible(
+            result.get("shareholder_count")
+        ):
+            print(
+                f"[SHAREHOLDER-FINAL-SKIP] {ticker}: "
+                f"holders={result.get('shareholder_count')}"
+            )
             continue
 
         eligible_candidates.append(result)
