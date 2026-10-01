@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 import requests
+from curl_cffi import requests as browser_requests
 from pypdf import PdfReader
 
 from scanner.market_data import fetch_company_announcements
@@ -112,20 +113,89 @@ def extract_shareholder_count(text: str) -> int | None:
     return None
 
 
-def _download_pdf_text(url: str, timeout: int = 30) -> str:
-    response = requests.get(
-        url,
-        timeout=timeout,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (compatible; CuankusMomentum/1.0; "
-                "+https://www.idx.co.id/)"
-            )
-        },
-    )
-    response.raise_for_status()
+def _idx_url_candidates(url: str) -> list[str]:
+    """Return equivalent official IDX attachment URLs.
 
-    reader = PdfReader(BytesIO(response.content))
+    IDX announcement metadata currently returns /StaticData/... URLs, while
+    some legacy files are also reachable under /Portals/0/StaticData/....
+    """
+    candidates = [url]
+    marker = "https://www.idx.co.id/StaticData/"
+    if url.startswith(marker):
+        candidates.append(
+            url.replace(
+                marker,
+                "https://www.idx.co.id/Portals/0/StaticData/",
+                1,
+            )
+        )
+    return list(dict.fromkeys(candidates))
+
+
+def _download_pdf_bytes(url: str, timeout: int = 30) -> bytes:
+    """Download an official IDX PDF using a browser-compatible TLS profile.
+
+    Ordinary requests/curl calls can receive IDX/Incapsula 403 responses even
+    when the same public file opens in a browser. curl_cffi impersonates a
+    mainstream browser TLS fingerprint and is used as the primary transport.
+    """
+    headers = {
+        "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
+        "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://www.idx.co.id/id/berita/pengumuman/",
+    }
+
+    errors: list[str] = []
+
+    for candidate in _idx_url_candidates(url):
+        try:
+            response = browser_requests.get(
+                candidate,
+                headers=headers,
+                impersonate="chrome",
+                timeout=timeout,
+                allow_redirects=True,
+            )
+            response.raise_for_status()
+            content = bytes(response.content)
+            if content.startswith(b"%PDF"):
+                return content
+            errors.append(
+                f"{candidate}: HTTP {response.status_code}, not a PDF"
+            )
+        except Exception as exc:
+            errors.append(
+                f"{candidate}: {type(exc).__name__}: {exc}"
+            )
+
+        # Last-resort ordinary request, useful if the WAF is temporarily
+        # relaxed or curl_cffi has a transport-specific issue.
+        try:
+            response = requests.get(
+                candidate,
+                headers=headers,
+                timeout=timeout,
+                allow_redirects=True,
+            )
+            response.raise_for_status()
+            content = response.content
+            if content.startswith(b"%PDF"):
+                return content
+            errors.append(
+                f"{candidate} [requests]: HTTP {response.status_code}, not a PDF"
+            )
+        except Exception as exc:
+            errors.append(
+                f"{candidate} [requests]: {type(exc).__name__}: {exc}"
+            )
+
+    raise RuntimeError(" | ".join(errors[-4:]))
+
+
+def _download_pdf_text(url: str, timeout: int = 30) -> str:
+    content = _download_pdf_bytes(url, timeout=timeout)
+
+    reader = PdfReader(BytesIO(content))
     parts: list[str] = []
     for page in reader.pages:
         try:
