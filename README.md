@@ -7,7 +7,7 @@ Active extra filters before microstructure:
 - Market cap > Rp100B and < Rp10T
 - Volume MA10 >= 2 x Volume MA100
 - Value MA5 > Rp500,000,000
-- Number of Shareholders < 5,000
+- Number of Shareholders < 5,000 (implemented; enable after smoke test)
 
 Daily MA inputs come from IDX stock-history and use completed trading days only.
 The current intraday session is excluded so partial-day volume/value do not distort the MA.
