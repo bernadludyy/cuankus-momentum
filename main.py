@@ -448,6 +448,38 @@ def format_alert(result: dict) -> str:
     )
 
 
+def enrich_quote_from_stock_summary(quote: dict) -> dict:
+    """Backfill cumulative activity fields from IDX stock-summary."""
+    ticker = str(quote.get("ticker") or "").upper().strip()
+    if not ticker:
+        return quote
+
+    row = get_stock_summary_row(ticker)
+    if not row:
+        return quote
+
+    mapping = {
+        "volume": "Volume",
+        "value": "Value",
+        "frequency": "Frequency",
+    }
+
+    for target, source in mapping.items():
+        if quote.get(target) is not None:
+            continue
+
+        raw = row.get(source)
+        if raw is None:
+            continue
+
+        try:
+            quote[target] = float(str(raw).replace(",", "").strip())
+        except (TypeError, ValueError):
+            pass
+
+    return quote
+
+
 def collect_quotes(tickers: list[str]) -> list[dict]:
     collected: list[dict] = []
 
@@ -493,6 +525,7 @@ def collect_quotes(tickers: list[str]) -> list[dict]:
     result: dict[str, dict] = {}
     for q in collected:
         if q.get("ticker"):
+            q = enrich_quote_from_stock_summary(q)
             result[q["ticker"]] = q
     return list(result.values())
 
@@ -532,14 +565,22 @@ def run_once() -> None:
         save_snapshot(quote)
 
     analyzed: list[dict] = []
+    evaluation_status: dict[str, str] = {}
+
+    missing_frequency_quotes = sum(
+        1 for quote in quotes if quote.get("frequency") is None
+    )
+    if missing_frequency_quotes:
+        print(
+            f"[DATA-QUALITY] frequency missing on "
+            f"{missing_frequency_quotes}/{len(quotes)} quotes"
+        )
 
     for quote in quotes:
         ticker = quote["ticker"]
 
-        # Price filter is applied before scoring and candidate selection.
-        # Snapshots are still saved above, so a stock that later falls below
-        # the threshold already has intraday history available.
         if not price_is_eligible(quote.get("last")):
+            evaluation_status[ticker] = "NO_SIGNAL"
             print(
                 f"[PRICE-PRE-SKIP] {ticker}: "
                 f"price={quote.get('last')} "
@@ -549,6 +590,7 @@ def run_once() -> None:
 
         result = analyze_ticker(ticker)
         if not result:
+            evaluation_status[ticker] = "NOT_EVALUATED"
             continue
 
         result.update(
@@ -558,6 +600,7 @@ def run_once() -> None:
         )
 
         analyzed.append(result)
+        evaluation_status[ticker] = "NO_SIGNAL"
 
         print(
             f"{ticker}: phase={result['phase']} "
@@ -566,34 +609,16 @@ def run_once() -> None:
             f"freq={result.get('frequency_spike')}"
         )
 
-    # Keep the six microstructure slots, but only spend them on stocks
-    # that already pass the price and market-cap filters.
+    # Build pools before allocating microstructure slots. Tickers that qualify
+    # for a pool but lose a slot are PENDING_MICRO, not NO_SIGNAL.
     locked_pool = sorted(
         [x for x in analyzed if x["phase"] != "NONE"],
         key=lambda x: float(x.get("score") or 0),
         reverse=True,
     )
 
-    selected: list[dict] = []
-    selected_tickers: set[str] = set()
-
-    # Existing higher-phase signals keep first priority.
-    add_eligible_from_pool(
-        selected,
-        selected_tickers,
-        locked_pool,
-        MICRO_MAX_CANDIDATES,
-    )
-
-    remaining_slots = max(0, MICRO_MAX_CANDIDATES - len(selected))
-    ignition_slots = min(IGNITION_RESERVED_SLOTS, remaining_slots)
-
-    ignition_pool = [
-        x for x in analyzed
-        if x["ticker"] not in selected_tickers
-        and is_ignition_pre_candidate(x)
-    ]
-    ignition_pool.sort(
+    ignition_pool = sorted(
+        [x for x in analyzed if is_ignition_pre_candidate(x)],
         key=lambda x: (
             float(x.get("volume_spike") or 0),
             float(x.get("score") or 0),
@@ -601,12 +626,55 @@ def run_once() -> None:
         reverse=True,
     )
 
+    normal_pool = sorted(
+        [
+            x for x in analyzed
+            if (
+                x["phase"] != "NONE"
+                or float(x.get("score") or 0) >= MICRO_MIN_PRE_SCORE
+            )
+        ],
+        key=lambda x: (
+            x["phase"] != "NONE",
+            float(x.get("score") or 0),
+        ),
+        reverse=True,
+    )
+
+    potential_tickers = {
+        x["ticker"]
+        for x in (locked_pool + ignition_pool + normal_pool)
+    }
+    for ticker in potential_tickers:
+        evaluation_status[ticker] = "PENDING_MICRO"
+
+    selected: list[dict] = []
+    selected_tickers: set[str] = set()
+
+    ignition_reserve = min(
+        max(IGNITION_RESERVED_SLOTS, 0),
+        MICRO_MAX_CANDIDATES,
+    )
+    general_capacity = max(
+        0,
+        MICRO_MAX_CANDIDATES - ignition_reserve,
+    )
+
+    # Existing confirmed/locked signals may use only the non-reserved capacity
+    # first, so Ignition genuinely keeps its configured slots.
+    add_eligible_from_pool(
+        selected,
+        selected_tickers,
+        locked_pool,
+        general_capacity,
+    )
+
     before_ignition = len(selected)
     add_eligible_from_pool(
         selected,
         selected_tickers,
         ignition_pool,
-        ignition_slots,
+        ignition_reserve,
     )
 
     for result in selected[before_ignition:]:
@@ -617,24 +685,22 @@ def run_once() -> None:
             f"market_cap={format_market_cap(result.get('market_cap'))}"
         )
 
-    remaining_slots = max(0, MICRO_MAX_CANDIDATES - len(selected))
-
-    normal_pool = [
-        x for x in analyzed
-        if x["ticker"] not in selected_tickers
-        and (
-            x["phase"] != "NONE"
-            or float(x.get("score") or 0) >= MICRO_MIN_PRE_SCORE
-        )
-    ]
-    normal_pool.sort(
-        key=lambda x: (
-            x["phase"] != "NONE",
-            float(x.get("score") or 0),
-        ),
-        reverse=True,
+    # Reclaim unused Ignition slots, prioritizing remaining locked signals.
+    remaining_slots = max(
+        0,
+        MICRO_MAX_CANDIDATES - len(selected),
+    )
+    add_eligible_from_pool(
+        selected,
+        selected_tickers,
+        locked_pool,
+        remaining_slots,
     )
 
+    remaining_slots = max(
+        0,
+        MICRO_MAX_CANDIDATES - len(selected),
+    )
     add_eligible_from_pool(
         selected,
         selected_tickers,
@@ -642,10 +708,35 @@ def run_once() -> None:
         remaining_slots,
     )
 
+    # Hard-filter rejects are genuine NO_SIGNAL for Bot 4. Candidates that
+    # merely lost a microstructure slot remain PENDING_MICRO.
+    for result in analyzed:
+        ticker = result["ticker"]
+
+        if (
+            result.get("_market_cap_checked")
+            and not result.get("_market_cap_eligible")
+        ):
+            evaluation_status[ticker] = "NO_SIGNAL"
+
+        if (
+            result.get("_daily_filter_checked")
+            and not result.get("_daily_filter_eligible")
+        ):
+            evaluation_status[ticker] = "NO_SIGNAL"
+
+        if (
+            result.get("_shareholder_checked")
+            and not result.get("_shareholder_eligible")
+        ):
+            evaluation_status[ticker] = "NO_SIGNAL"
+
     print(
         f"Microstructure candidates: {len(selected)} "
-        f"(max={MICRO_MAX_CANDIDATES}, ignition_reserved={IGNITION_RESERVED_SLOTS})"
+        f"(max={MICRO_MAX_CANDIDATES}, "
+        f"ignition_reserved={ignition_reserve})"
     )
+
     candidates: list[dict] = []
 
     for result in selected:
@@ -654,33 +745,44 @@ def run_once() -> None:
         try:
             micro = fetch_microstructure(ticker)
             result = apply_micro_confirmation(result, micro)
-
-            print(
-                f"[MICRO] {ticker}: "
-                f"micro={result.get('micro_score')} "
-                f"buy={format_num((result.get('aggressive_buy_ratio') or 0) * 100, '%')} "
-                f"bid={format_num(result.get('bid_percent'), '%')} "
-                f"phase={result['phase']} "
-                f"score={result['score']}"
-            )
-
         except Exception as exc:
-            print(f"[WARN] microstructure {ticker} gagal: {exc}")
+            evaluation_status[ticker] = "API_FAILED"
+            print(
+                f"[MICRO-FAILED] {ticker}: "
+                f"{type(exc).__name__}: {exc}"
+            )
             continue
 
-        if result["phase"] != "NONE":
+        print(
+            f"[MICRO] {ticker}: "
+            f"micro={result.get('micro_score')} "
+            f"buy={format_num((result.get('aggressive_buy_ratio') or 0) * 100, '%')} "
+            f"bid={format_num(result.get('bid_percent'), '%')} "
+            f"trades={result.get('trade_count')}/"
+            f"{result.get('raw_trade_count')} "
+            f"latest_age={format_num(result.get('latest_trade_age_minutes'), 'm')} "
+            f"phase={result['phase']} "
+            f"score={result['score']}"
+        )
+
+        if result["phase"] == "NONE":
+            evaluation_status[ticker] = "NO_SIGNAL"
+        else:
+            evaluation_status[ticker] = "SIGNAL"
             candidates.append(result)
 
-    candidates.sort(key=lambda x: x["score"], reverse=True)
+    candidates.sort(
+        key=lambda x: x["score"],
+        reverse=True,
+    )
 
     eligible_candidates: list[dict] = []
 
     for result in candidates:
         ticker = result["ticker"]
 
-        # Safety check only. These filters already ran before microstructure,
-        # so no candidate slot should be wasted here.
         if not price_is_eligible(result.get("price")):
+            evaluation_status[ticker] = "NO_SIGNAL"
             print(
                 f"[PRICE-SKIP] {ticker}: "
                 f"price={result.get('price')} "
@@ -689,6 +791,7 @@ def run_once() -> None:
             continue
 
         if not market_cap_is_eligible(result.get("market_cap")):
+            evaluation_status[ticker] = "NO_SIGNAL"
             print(
                 f"[MARKET-CAP-SKIP] {ticker}: "
                 f"market_cap={format_market_cap(result.get('market_cap'))}"
@@ -703,12 +806,14 @@ def run_once() -> None:
                 "enough_history": result.get("enough_history"),
             }
         ):
+            evaluation_status[ticker] = "NO_SIGNAL"
             print(f"[DAILY-FILTER-FINAL-SKIP] {ticker}")
             continue
 
         if SHAREHOLDER_FILTER_ENABLED and not shareholder_is_eligible(
             result.get("shareholder_count")
         ):
+            evaluation_status[ticker] = "NO_SIGNAL"
             print(
                 f"[SHAREHOLDER-FINAL-SKIP] {ticker}: "
                 f"holders={result.get('shareholder_count')}"
@@ -716,17 +821,26 @@ def run_once() -> None:
             continue
 
         eligible_candidates.append(result)
+        evaluation_status[ticker] = "SIGNAL"
 
-    final_by_ticker = {
-        result["ticker"]: result
-        for result in eligible_candidates
-    }
-
-    # Any ticker without a final eligible signal contributes to the re-arm gap.
-    for quote in quotes:
-        ticker = quote["ticker"]
-        if ticker not in final_by_ticker:
+    # Re-arm only when a genuine no-signal observation exists. Preserve state
+    # for candidates awaiting microstructure, insufficient baseline data, and
+    # API failures.
+    for ticker, status in evaluation_status.items():
+        if status == "NO_SIGNAL":
             mark_no_signal(ticker)
+
+    status_counts: dict[str, int] = {}
+    for status in evaluation_status.values():
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    print(
+        "[EVAL-STATUS] "
+        + " ".join(
+            f"{key}={value}"
+            for key, value in sorted(status_counts.items())
+        )
+    )
 
     for result in eligible_candidates:
         ticker = result["ticker"]
