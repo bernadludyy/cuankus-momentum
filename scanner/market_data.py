@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 import re
-import time
 
-import requests
+from project_fabric.data_gateway import DataGateway, market_policy
 
 from config import (
     ZPI_API_KEY,
@@ -18,6 +17,7 @@ from config import (
 
 
 _LAST_STOCK_SUMMARY_BY_TICKER: dict[str, dict[str, Any]] = {}
+_GATEWAY = DataGateway(service="cuankus-momentum")
 
 
 def _headers() -> dict[str, str]:
@@ -30,51 +30,20 @@ def _headers() -> dict[str, str]:
 
 def _request_json(
     url: str,
+    *,
+    endpoint: str,
+    family: str,
     params: dict | None = None,
     timeout: int = 30,
-    attempts: int = 3,
 ) -> Any:
-    last_exc: Exception | None = None
-
-    for attempt in range(1, attempts + 1):
-        try:
-            response = requests.get(
-                url,
-                headers=_headers(),
-                params=params or {},
-                timeout=timeout,
-            )
-
-            if response.status_code == 429 or response.status_code >= 500:
-                response.raise_for_status()
-
-            response.raise_for_status()
-            return response.json()
-
-        except (
-            requests.exceptions.SSLError,
-            requests.exceptions.ConnectionError,
-            requests.exceptions.Timeout,
-            requests.exceptions.HTTPError,
-        ) as exc:
-            last_exc = exc
-
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            retryable_http = status is None or status == 429 or status >= 500
-
-            if attempt >= attempts or not retryable_http:
-                raise
-
-            wait_seconds = attempt
-            print(
-                f"[RETRY] API attempt {attempt}/{attempts} gagal "
-                f"({type(exc).__name__}); retry {wait_seconds}s..."
-            )
-            time.sleep(wait_seconds)
-
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError("API request gagal tanpa exception detail")
+    return _GATEWAY.get_json(
+        endpoint=f"{family}:{endpoint}",
+        url=url,
+        headers=_headers(),
+        params=params or {},
+        timeout=timeout,
+        policy=market_policy(family, endpoint),
+    )
 
 
 def _get(path: str, params: dict | None = None, timeout: int = 30) -> Any:
@@ -85,6 +54,8 @@ def _get(path: str, params: dict | None = None, timeout: int = 30) -> Any:
 
     return _request_json(
         url,
+        endpoint=path,
+        family="pluang",
         params=params,
         timeout=timeout,
     )
@@ -111,9 +82,13 @@ def audit_endpoint(path: str, params: dict | None = None) -> Any:
 
 def _get_from_base(base_url: str, path: str, params: dict | None = None, timeout: int = 30) -> Any:
     validate_zpi_config()
-    url = f"{base_url.rstrip('/')}/{path.strip().lstrip('/')}"
+    path = path.strip().lstrip("/")
+    url = f"{base_url.rstrip('/')}/{path}"
+    family = "idx" if base_url.rstrip("/") == ZPI_IDX_BASE_URL.rstrip("/") else "pluang"
     return _request_json(
         url,
+        endpoint=path,
+        family=family,
         params=params,
         timeout=timeout,
     )
