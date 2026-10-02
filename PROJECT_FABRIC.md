@@ -26,9 +26,9 @@ Project Fabric is the shared engineering foundation for this repository and the 
 
 Phase 1 (this PR) is deliberately non-breaking: add the framework, tests, CI, and a workflow preflight check. Existing bot logic remains unchanged.
 
-Phase 2: migrate duplicated HTTP/API helpers to `ResilientHttp`, wrap stable endpoints with `JsonTTLCache`, and emit run metrics.
+Phase 2: COMPLETE. Market-data reads now pass through `DataGateway` with bounded retries, endpoint-specific freshness, short-lived cache, stale-on-error only for explicitly safe reference data, and per-run API telemetry. Live quote/orderbook/running-trades remain uncached. GitHub Actions restores/saves only the cache directory and uploads the usage report separately.
 
-Phase 3: introduce `DATABASE_URL` with PostgreSQL/Neon as persistent production storage while retaining SQLite as local fallback.
+Phase 3: introduce `DATABASE_URL` with PostgreSQL/Neon as persistent production storage while retaining SQLite as local fallback. The Phase 2 gateway is the compatibility boundary: its cache/metrics backend can move from runner-local files to PostgreSQL without changing strategy code.
 
 Phase 4: central dashboard/observability can read the persistent run, API-usage, signal, and delivery tables.
 
@@ -47,3 +47,19 @@ if payload is None:
 ```
 
 Do not cache highly time-sensitive quote/orderbook data unless the strategy explicitly defines a very short TTL. Do not automatically retry Telegram POST delivery unless an idempotency mechanism is present.
+
+
+## Phase 2 freshness contract
+
+| Family | Endpoint | Fresh TTL | Stale fallback |
+|---|---|---:|---:|
+| IDX | stock-summary | 120s | 600s |
+| IDX | stock-history | 6h | 24h |
+| IDX | foreign-flow | 120s | 600s |
+| IDX | company-announcements | 6h | 24h |
+| IDX | top-movers | 30s | 120s |
+| Pluang | summary / quote | 0 | disabled |
+| Pluang | orderbook | 0 | disabled |
+| Pluang | running-trades | 0 | disabled |
+
+The stale fallback is only used after an upstream failure. It is never enabled for live execution or microstructure endpoints.
