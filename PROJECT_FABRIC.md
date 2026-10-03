@@ -63,3 +63,10 @@ Do not cache highly time-sensitive quote/orderbook data unless the strategy expl
 | Pluang | running-trades | 0 | disabled |
 
 The stale fallback is only used after an upstream failure. It is never enabled for live execution or microstructure endpoints.
+
+
+## Phase 3 shared-cache architecture
+
+All repositories can share compatible cache entries through the same PostgreSQL/Neon database by configuring the same `PROJECT_FABRIC_DATABASE_URL` secret and `PROJECT_FABRIC_CACHE_NAMESPACE=shared-v1`.
+
+The shared schema stores cache entries, distributed leases, and API usage runs under `project_fabric`. Local JSON remains a resilience mirror/fallback; live quote/orderbook/running-trades remain uncached.

@@ -21,6 +21,9 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      PROJECT_FABRIC_DATABASE_URL: ${{ secrets.PROJECT_FABRIC_DATABASE_URL }}
+      PROJECT_FABRIC_CACHE_NAMESPACE: shared-v1
 
     steps:
       - name: Checkout
@@ -36,6 +39,9 @@ jobs:
 
       - name: Project Fabric preflight
         run: python -m project_fabric.selfcheck
+
+      - name: Shared cache backend status
+        run: python -m project_fabric.db_admin status
 
       - name: Restore Project Fabric cache
         uses: actions/cache/restore@v4
