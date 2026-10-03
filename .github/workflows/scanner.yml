@@ -24,6 +24,7 @@ jobs:
     env:
       PROJECT_FABRIC_DATABASE_URL: ${{ secrets.PROJECT_FABRIC_DATABASE_URL }}
       PROJECT_FABRIC_CACHE_NAMESPACE: shared-v1
+      PROJECT_FABRIC_DB_REQUIRED: "true"
 
     steps:
       - name: Checkout
@@ -43,6 +44,12 @@ jobs:
       - name: Shared cache backend status
         run: python -m project_fabric.db_admin status --require
 
+      - name: Phase 4 run start
+        run: python -m project_fabric.observability run-start --service cuankus-momentum --require
+
+      - name: Phase 4 database health
+        run: python -m project_fabric.observability health --service cuankus-momentum --component shared_database --status ok --require
+
       - name: Restore Project Fabric cache
         uses: actions/cache/restore@v4
         with:
@@ -60,6 +67,10 @@ jobs:
             cuankus-momentum-db-
 
       - name: Regression tests
+        env:
+          PROJECT_FABRIC_DATABASE_URL: ""
+          PROJECT_FABRIC_DB_REQUIRED: "false"
+          PROJECT_FABRIC_INTEGRATION_TESTS: "0"
         run: |
           python -m py_compile main.py scanner/*.py storage/*.py bot/*.py
           python test_regressions.py
@@ -203,3 +214,9 @@ jobs:
           path: .runtime/project_fabric/api_usage.json
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Phase 4 run finish
+        if: always()
+        env:
+          FABRIC_JOB_STATUS: ${{ job.status }}
+        run: python -m project_fabric.observability run-finish --service cuankus-momentum --status "$FABRIC_JOB_STATUS" --require

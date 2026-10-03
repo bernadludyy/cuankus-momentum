@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 
 from bot.notifier import send_telegram
+from project_fabric.observability import ObservabilityClient
 from config import (
     BASE_DIR,
     BATCH_SIZE,
@@ -69,6 +70,9 @@ from storage.db import (
     save_shareholder_filter,
     save_snapshot,
 )
+
+
+_OBS = ObservabilityClient("cuankus-momentum")
 
 
 def load_universe() -> list[str]:
@@ -846,9 +850,37 @@ def run_once() -> None:
         ticker = result["ticker"]
 
         if should_alert(result):
+            signal_event_id = _OBS.record_signal(
+                signal_type=result["phase"],
+                entity=ticker,
+                score=result.get("score"),
+                status="alert_candidate",
+                payload={
+                    "price": result.get("price"),
+                    "foreign_score": result.get("foreign_score"),
+                    "foreign_status": result.get("foreign_status"),
+                    "micro_score": result.get("micro_score"),
+                    "daily_change_pct": result.get("daily_change_pct"),
+                    "interval_return_pct": result.get("interval_return_pct"),
+                    "shareholder_count": result.get("shareholder_count"),
+                },
+            )
             delivery = send_telegram(format_alert(result))
+            delivery_ok = bool(delivery.get("ok"))
+            _OBS.record_delivery(
+                channel="telegram",
+                status="success" if delivery_ok else "failed",
+                signal_event_id=signal_event_id,
+                destination="configured-telegram-targets",
+                metadata={
+                    "sent": delivery.get("sent", 0),
+                    "failed": delivery.get("failed", 0),
+                    "signal_type": result["phase"],
+                    "ticker": ticker,
+                },
+            )
 
-            if delivery.get("ok"):
+            if delivery_ok:
                 mark_alerted(result)
                 print(
                     f"[ALERT] {ticker} "
