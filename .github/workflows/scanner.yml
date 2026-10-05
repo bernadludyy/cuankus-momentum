@@ -1,6 +1,9 @@
 name: Cuankus Momentum Scanner
 
 on:
+  push:
+    paths:
+      - ".optimization-test-trigger"
   workflow_dispatch:
     inputs:
       run_tests:
