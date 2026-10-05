@@ -251,7 +251,7 @@ class DataGateway:
                     database_url,
                     namespace=namespace,
                     service=service,
-                    auto_migrate=True,
+                    auto_migrate=False,
                 )
             except Exception as exc:
                 emit(
