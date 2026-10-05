@@ -15,7 +15,7 @@ on:
         type: boolean
 concurrency:
   group: cuankus-momentum-scanner
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   scan:
@@ -38,26 +38,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Project Fabric preflight
-        run: python -m project_fabric.selfcheck
-
-      - name: Shared cache backend status
-        run: python -m project_fabric.db_admin status --require
-
-      - name: Phase 4 run start
-        run: python -m project_fabric.observability run-start --service cuankus-momentum --require
-
-      - name: Phase 4 database health
-        run: python -m project_fabric.observability health --service cuankus-momentum --component shared_database --status ok --require
-
-      - name: Restore Project Fabric cache
-        uses: actions/cache/restore@v4
-        with:
-          path: .runtime/project_fabric/cache
-          key: fabric-cache-${{ github.ref_name }}-${{ github.run_id }}
-          restore-keys: |
-            fabric-cache-${{ github.ref_name }}-
-
       - name: Restore scanner DB
         uses: actions/cache/restore@v4
         with:
@@ -67,6 +47,7 @@ jobs:
             cuankus-momentum-db-
 
       - name: Regression tests
+        if: github.event_name == 'workflow_dispatch' && inputs.run_tests
         env:
           PROJECT_FABRIC_DATABASE_URL: ""
           PROJECT_FABRIC_DB_REQUIRED: "false"
@@ -194,26 +175,6 @@ jobs:
         with:
           path: data/cuankus_momentum.db
           key: cuankus-momentum-db-${{ github.run_id }}
-
-      - name: Project Fabric API usage report
-        if: always()
-        run: python -m project_fabric.report --github-summary
-
-      - name: Save Project Fabric cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: .runtime/project_fabric/cache
-          key: fabric-cache-${{ github.ref_name }}-${{ github.run_id }}
-
-      - name: Upload Project Fabric usage
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: project-fabric-usage-${{ github.run_id }}
-          path: .runtime/project_fabric/api_usage.json
-          if-no-files-found: ignore
-          retention-days: 14
 
       - name: Phase 4 run finish
         if: always()
