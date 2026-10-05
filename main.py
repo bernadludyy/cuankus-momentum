@@ -72,7 +72,7 @@ from storage.db import (
 )
 
 
-_OBS = ObservabilityClient("cuankus-momentum")
+_OBS = ObservabilityClient("cuankus-momentum", auto_migrate=False)
 
 
 def load_universe() -> list[str]:
