@@ -139,7 +139,17 @@ class ResilientHttp:
         self.timeout = timeout
         self.retries = retries
         self.backoff = backoff
-        self.session = session or requests.Session()
+        self._session_override = session
+        self._thread_local = threading.local()
+
+    def _session(self) -> requests.Session:
+        if self._session_override is not None:
+            return self._session_override
+        session = getattr(self._thread_local, "session", None)
+        if session is None:
+            session = requests.Session()
+            self._thread_local.session = session
+        return session
 
     def request_json(
         self,
@@ -158,7 +168,7 @@ class ResilientHttp:
             if on_attempt is not None:
                 on_attempt(attempt + 1)
             try:
-                response = self.session.request(method, url, **kwargs)
+                response = self._session().request(method, url, **kwargs)
             except (requests.Timeout, requests.ConnectionError):
                 if method not in retryable_methods or attempt >= self.retries:
                     raise
