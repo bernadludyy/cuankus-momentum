@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 from bot.notifier import send_telegram
@@ -744,19 +745,35 @@ def run_once() -> None:
 
     candidates: list[dict] = []
 
+    # The six live microstructure checks are independent network operations.
+    # Run a small bounded pool to reduce wall-clock time without increasing
+    # the number of ZAPI requests or changing any scoring logic.
+    micro_results: dict[str, dict] = {}
+    if selected:
+        worker_count = min(3, len(selected))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            future_by_ticker = {
+                executor.submit(fetch_microstructure, item["ticker"]): item["ticker"]
+                for item in selected
+            }
+            for future in as_completed(future_by_ticker):
+                ticker = future_by_ticker[future]
+                try:
+                    micro_results[ticker] = future.result()
+                except Exception as exc:
+                    evaluation_status[ticker] = "API_FAILED"
+                    print(
+                        f"[MICRO-FAILED] {ticker}: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+
     for result in selected:
         ticker = result["ticker"]
-
-        try:
-            micro = fetch_microstructure(ticker)
-            result = apply_micro_confirmation(result, micro)
-        except Exception as exc:
-            evaluation_status[ticker] = "API_FAILED"
-            print(
-                f"[MICRO-FAILED] {ticker}: "
-                f"{type(exc).__name__}: {exc}"
-            )
+        micro = micro_results.get(ticker)
+        if micro is None:
             continue
+
+        result = apply_micro_confirmation(result, micro)
 
         print(
             f"[MICRO] {ticker}: "
