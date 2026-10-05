@@ -176,8 +176,3 @@ jobs:
           path: data/cuankus_momentum.db
           key: cuankus-momentum-db-${{ github.run_id }}
 
-      - name: Phase 4 run finish
-        if: always()
-        env:
-          FABRIC_JOB_STATUS: ${{ job.status }}
-        run: python -m project_fabric.observability run-finish --service cuankus-momentum --status "$FABRIC_JOB_STATUS" --require
