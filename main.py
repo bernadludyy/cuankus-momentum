@@ -429,7 +429,7 @@ def format_alert(result: dict) -> str:
         f"Market Cap: {format_market_cap(result.get('market_cap'))}\n"
         f"Foreign Score: {format_num(result.get('foreign_score'), '/100')} "
         f"({result.get('foreign_status') or 'UNAVAILABLE'})\n"
-        f"Net Foreign: {format_shares(result.get('net_foreign_shares'))} shares\n"
+        f"Net Foreign Value: {format_rupiah_compact(result.get('net_foreign_value'))}\n"
         f"Net Foreign Ratio: {format_signed_pct(result.get('net_foreign_ratio_pct'))}\n"
         f"Foreign Buy Dominance: "
         f"{format_num(result.get('foreign_buy_dominance_pct'), '%')}\n"
@@ -599,7 +599,8 @@ def run_once() -> None:
 
         result.update(
             build_foreign_metrics(
-                get_stock_summary_row(ticker)
+                get_stock_summary_row(ticker),
+                price=result.get("price"),
             )
         )
 
