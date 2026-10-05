@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from scanner.market_hours import WIB
+from scanner.foreign_score import build_foreign_metrics
 from scanner.microstructure import (
     _gte as micro_gte,
     _trade_age_minutes,
@@ -49,8 +50,24 @@ def test_trade_age_parser() -> None:
     assert _trade_age_minutes("bad-time", now=now) is None
 
 
+def test_foreign_value_basis() -> None:
+    row = {
+        "ForeignBuy": 2_000_000,
+        "ForeignSell": 500_000,
+        "Volume": 10_000_000,
+        "Value": 1_000_000_000,
+    }
+    metrics = build_foreign_metrics(row, price=100.0)
+
+    assert metrics["foreign_buy_value"] == 200_000_000
+    assert metrics["foreign_sell_value"] == 50_000_000
+    assert metrics["net_foreign_value"] == 150_000_000
+    assert round(metrics["net_foreign_ratio_pct"], 2) == 15.00
+
+
 if __name__ == "__main__":
     test_zero_is_not_missing()
     test_phase_hierarchy_prefers_pre_momentum_over_leakage()
     test_trade_age_parser()
+    test_foreign_value_basis()
     print("Regression tests passed.")
