@@ -113,6 +113,13 @@ def init_db() -> None:
             golden_pocket_lower REAL,
             golden_pocket_upper REAL,
             golden_pocket_lookback INTEGER,
+            swing_low_5d REAL,
+            swing_high_5d REAL,
+            swing_low_date_5d TEXT,
+            swing_high_date_5d TEXT,
+            golden_pocket_lower_5d REAL,
+            golden_pocket_upper_5d REAL,
+            golden_pocket_lookback_5d INTEGER,
             ts TEXT NOT NULL
         )
         """
@@ -131,6 +138,13 @@ def init_db() -> None:
         ("golden_pocket_lower", "REAL"),
         ("golden_pocket_upper", "REAL"),
         ("golden_pocket_lookback", "INTEGER"),
+        ("swing_low_5d", "REAL"),
+        ("swing_high_5d", "REAL"),
+        ("swing_low_date_5d", "TEXT"),
+        ("swing_high_date_5d", "TEXT"),
+        ("golden_pocket_lower_5d", "REAL"),
+        ("golden_pocket_upper_5d", "REAL"),
+        ("golden_pocket_lookback_5d", "INTEGER"),
     ):
         if column_name not in daily_filter_columns:
             cur.execute(
@@ -417,6 +431,13 @@ def get_cached_daily_filter(
             golden_pocket_lower,
             golden_pocket_upper,
             golden_pocket_lookback,
+            swing_low_5d,
+            swing_high_5d,
+            swing_low_date_5d,
+            swing_high_date_5d,
+            golden_pocket_lower_5d,
+            golden_pocket_upper_5d,
+            golden_pocket_lookback_5d,
             ts
         FROM daily_filter_cache
         WHERE ticker = ?
@@ -449,6 +470,15 @@ def get_cached_daily_filter(
         "golden_pocket_lower": row["golden_pocket_lower"],
         "golden_pocket_upper": row["golden_pocket_upper"],
         "golden_pocket_lookback": row["golden_pocket_lookback"],
+        "swing_low_5d": row["swing_low_5d"],
+        "swing_high_5d": row["swing_high_5d"],
+        "swing_low_date_5d": row["swing_low_date_5d"],
+        "swing_high_date_5d": row["swing_high_date_5d"],
+        "golden_pocket_lower_5d": row["golden_pocket_lower_5d"],
+        "golden_pocket_upper_5d": row["golden_pocket_upper_5d"],
+        "golden_pocket_lookback_5d": row[
+            "golden_pocket_lookback_5d"
+        ],
     }
 
 
@@ -471,9 +501,19 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
             golden_pocket_lower,
             golden_pocket_upper,
             golden_pocket_lookback,
+            swing_low_5d,
+            swing_high_5d,
+            swing_low_date_5d,
+            swing_high_date_5d,
+            golden_pocket_lower_5d,
+            golden_pocket_upper_5d,
+            golden_pocket_lookback_5d,
             ts
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
         ON CONFLICT(ticker) DO UPDATE SET
             volume_ma_short = excluded.volume_ma_short,
             volume_ma_long = excluded.volume_ma_long,
@@ -488,6 +528,13 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
             golden_pocket_lower = excluded.golden_pocket_lower,
             golden_pocket_upper = excluded.golden_pocket_upper,
             golden_pocket_lookback = excluded.golden_pocket_lookback,
+            swing_low_5d = excluded.swing_low_5d,
+            swing_high_5d = excluded.swing_high_5d,
+            swing_low_date_5d = excluded.swing_low_date_5d,
+            swing_high_date_5d = excluded.swing_high_date_5d,
+            golden_pocket_lower_5d = excluded.golden_pocket_lower_5d,
+            golden_pocket_upper_5d = excluded.golden_pocket_upper_5d,
+            golden_pocket_lookback_5d = excluded.golden_pocket_lookback_5d,
             ts = excluded.ts
         """,
         (
@@ -507,6 +554,17 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
             (
                 int(metrics.get("golden_pocket_lookback"))
                 if metrics.get("golden_pocket_lookback") is not None
+                else None
+            ),
+            metrics.get("swing_low_5d"),
+            metrics.get("swing_high_5d"),
+            metrics.get("swing_low_date_5d"),
+            metrics.get("swing_high_date_5d"),
+            metrics.get("golden_pocket_lower_5d"),
+            metrics.get("golden_pocket_upper_5d"),
+            (
+                int(metrics.get("golden_pocket_lookback_5d"))
+                if metrics.get("golden_pocket_lookback_5d") is not None
                 else None
             ),
             now_wib_iso(),
