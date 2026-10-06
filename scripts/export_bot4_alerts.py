@@ -3,12 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import psycopg
 from psycopg.rows import dict_row
+
+from scanner.market_data import fetch_stock_history
 
 
 WIB = ZoneInfo("Asia/Jakarta")
@@ -21,6 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--scanner-db", default="")
     return parser.parse_args()
 
 
@@ -36,6 +40,24 @@ def json_ready(row: dict) -> dict:
     result["signal_payload"] = result.get("signal_payload") or {}
     result["delivery_metadata"] = result.get("delivery_metadata") or {}
     return result
+
+
+def scanner_alerts(path: str, start_date: date, end_date: date) -> list[dict]:
+    if not path or not Path(path).exists():
+        return []
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT id, ticker, ts, phase, score, price
+            FROM alerts
+            WHERE substr(ts, 1, 10) >= ?
+              AND substr(ts, 1, 10) <= ?
+            ORDER BY ts ASC, id ASC
+            """,
+            (start_date.isoformat(), end_date.isoformat()),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def main() -> None:
@@ -97,6 +119,25 @@ def main() -> None:
             )
             rows = [json_ready(row) for row in cursor.fetchall()]
 
+    local_alerts = scanner_alerts(args.scanner_db, start_date, end_date)
+    tickers = sorted(
+        {
+            str(item.get("ticker") or "").upper()
+            for item in [*rows, *local_alerts]
+            if item.get("ticker")
+        }
+    )
+    stock_history: dict[str, object] = {}
+    for ticker in tickers:
+        try:
+            stock_history[ticker] = fetch_stock_history(ticker, length=140)
+            print(f"Fetched stock history for {ticker}")
+        except Exception as exc:
+            stock_history[ticker] = {
+                "error": f"{type(exc).__name__}: {exc}"
+            }
+            print(f"[WARN] stock history {ticker}: {exc}")
+
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     document = {
@@ -106,13 +147,20 @@ def main() -> None:
         "end_date": end_date.isoformat(),
         "generated_at": datetime.now(WIB).isoformat(),
         "row_count": len(rows),
+        "scanner_alert_count": len(local_alerts),
         "rows": rows,
+        "scanner_alerts": local_alerts,
+        "stock_history": stock_history,
     }
     output.write_text(
         json.dumps(document, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    print(f"Exported {len(rows)} successful Telegram alert deliveries")
+    print(
+        f"Exported {len(rows)} successful delivery events, "
+        f"{len(local_alerts)} scanner alerts, and "
+        f"{len(stock_history)} daily histories"
+    )
 
 
 if __name__ == "__main__":
