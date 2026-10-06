@@ -174,16 +174,26 @@ def format_price(value) -> str:
     return f"Rp{number:,.2f}"
 
 
-def format_golden_pocket(result: dict) -> str:
-    lower = result.get("golden_pocket_lower")
-    upper = result.get("golden_pocket_upper")
+def format_golden_pocket(result: dict, suffix: str = "") -> str:
+    def metric_key(name: str) -> str:
+        return f"{name}_{suffix}" if suffix else name
+
+    lower = result.get(metric_key("golden_pocket_lower"))
+    upper = result.get(metric_key("golden_pocket_upper"))
     price = result.get("price")
-    lookback = result.get("golden_pocket_lookback") or 20
+    default_lookback = 5 if suffix == "5d" else 20
+    lookback = (
+        result.get(metric_key("golden_pocket_lookback"))
+        or default_lookback
+    )
+    scope = "Tactical" if suffix == "5d" else "Structural"
+    position_label = f"GP {lookback}D Position"
+    swing_label = f"Swing {lookback}D"
 
     if lower is None or upper is None:
         return (
-            f"Golden Pocket (0.618-0.650, {lookback}D): -\n"
-            "GP Position: -"
+            f"Golden Pocket {scope} (0.618-0.650, {lookback}D): -\n"
+            f"{position_label}: -"
         )
 
     lower = float(lower)
@@ -202,16 +212,16 @@ def format_golden_pocket(result: dict) -> str:
             distance = ((lower - price) / price * 100) if price else 0.0
             position = f"BELOW {distance:.2f}% to zone"
 
-    swing_low = result.get("swing_low")
-    swing_high = result.get("swing_high")
-    low_date = result.get("swing_low_date") or "-"
-    high_date = result.get("swing_high_date") or "-"
+    swing_low = result.get(metric_key("swing_low"))
+    swing_high = result.get(metric_key("swing_high"))
+    low_date = result.get(metric_key("swing_low_date")) or "-"
+    high_date = result.get(metric_key("swing_high_date")) or "-"
 
     return (
-        f"Golden Pocket (0.618-0.650, {lookback}D): "
+        f"Golden Pocket {scope} (0.618-0.650, {lookback}D): "
         f"{format_price(lower)}-{format_price(upper)}\n"
-        f"GP Position: {position}\n"
-        f"Swing: {format_price(swing_low)} ({low_date}) -> "
+        f"{position_label}: {position}\n"
+        f"{swing_label}: {format_price(swing_low)} ({low_date}) -> "
         f"{format_price(swing_high)} ({high_date})"
     )
 
@@ -359,8 +369,8 @@ def get_daily_filter_metrics(ticker: str) -> dict:
     )
     if (
         cached is not None
-        and cached.get("golden_pocket_lower") is not None
-        and cached.get("golden_pocket_upper") is not None
+        and cached.get("golden_pocket_lookback") == 20
+        and cached.get("golden_pocket_lookback_5d") == 5
     ):
         return cached
 
@@ -405,6 +415,19 @@ def prepare_daily_filter_candidate(result: dict) -> bool:
         result["golden_pocket_upper"] = metrics.get("golden_pocket_upper")
         result["golden_pocket_lookback"] = metrics.get(
             "golden_pocket_lookback"
+        )
+        result["swing_low_5d"] = metrics.get("swing_low_5d")
+        result["swing_high_5d"] = metrics.get("swing_high_5d")
+        result["swing_low_date_5d"] = metrics.get("swing_low_date_5d")
+        result["swing_high_date_5d"] = metrics.get("swing_high_date_5d")
+        result["golden_pocket_lower_5d"] = metrics.get(
+            "golden_pocket_lower_5d"
+        )
+        result["golden_pocket_upper_5d"] = metrics.get(
+            "golden_pocket_upper_5d"
+        )
+        result["golden_pocket_lookback_5d"] = metrics.get(
+            "golden_pocket_lookback_5d"
         )
 
     result["_daily_filter_checked"] = True
@@ -502,6 +525,7 @@ def format_alert(result: dict) -> str:
         f"Value MA5: {format_rupiah_compact(result.get('value_ma'))}\n"
         f"Number of Shareholders: "
         f"{format_shareholder_count(result.get('shareholder_count'))}\n"
+        f"{format_golden_pocket(result, suffix='5d')}\n"
         f"{format_golden_pocket(result)}\n\n"
         f"Daily: {format_num(result.get('daily_change_pct'), '%')}\n"
         f"Interval: {format_num(result.get('interval_return_pct'), '%')}\n"
@@ -950,6 +974,15 @@ def run_once() -> None:
                     "golden_pocket_upper": result.get("golden_pocket_upper"),
                     "golden_pocket_lookback": result.get(
                         "golden_pocket_lookback"
+                    ),
+                    "golden_pocket_lower_5d": result.get(
+                        "golden_pocket_lower_5d"
+                    ),
+                    "golden_pocket_upper_5d": result.get(
+                        "golden_pocket_upper_5d"
+                    ),
+                    "golden_pocket_lookback_5d": result.get(
+                        "golden_pocket_lookback_5d"
                     ),
                 },
             )

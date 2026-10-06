@@ -89,6 +89,13 @@ def test_golden_pocket_from_recent_bullish_swing() -> None:
     assert round(metrics["golden_pocket_upper"], 2) == 138.20
     assert metrics["golden_pocket_lookback"] == 20
 
+    # The tactical pocket uses only the five most recent completed sessions.
+    assert metrics["swing_low_5d"] == 150.0
+    assert metrics["swing_high_5d"] == 160.0
+    assert round(metrics["golden_pocket_lower_5d"], 2) == 153.50
+    assert round(metrics["golden_pocket_upper_5d"], 2) == 153.82
+    assert metrics["golden_pocket_lookback_5d"] == 5
+
 
 def test_foreign_value_basis() -> None:
     row = {
