@@ -165,6 +165,57 @@ def format_rupiah_compact(value) -> str:
     return format_market_cap(value)
 
 
+def format_price(value) -> str:
+    if value is None:
+        return "-"
+    number = float(value)
+    if number.is_integer():
+        return f"Rp{number:,.0f}"
+    return f"Rp{number:,.2f}"
+
+
+def format_golden_pocket(result: dict) -> str:
+    lower = result.get("golden_pocket_lower")
+    upper = result.get("golden_pocket_upper")
+    price = result.get("price")
+    lookback = result.get("golden_pocket_lookback") or 20
+
+    if lower is None or upper is None:
+        return (
+            f"Golden Pocket (0.618-0.650, {lookback}D): -\n"
+            "GP Position: -"
+        )
+
+    lower = float(lower)
+    upper = float(upper)
+
+    if price is None:
+        position = "-"
+    else:
+        price = float(price)
+        if lower <= price <= upper:
+            position = "IN ZONE ✅"
+        elif price > upper:
+            distance = ((price - upper) / upper * 100) if upper else 0.0
+            position = f"ABOVE +{distance:.2f}%"
+        else:
+            distance = ((lower - price) / price * 100) if price else 0.0
+            position = f"BELOW {distance:.2f}% to zone"
+
+    swing_low = result.get("swing_low")
+    swing_high = result.get("swing_high")
+    low_date = result.get("swing_low_date") or "-"
+    high_date = result.get("swing_high_date") or "-"
+
+    return (
+        f"Golden Pocket (0.618-0.650, {lookback}D): "
+        f"{format_price(lower)}-{format_price(upper)}\n"
+        f"GP Position: {position}\n"
+        f"Swing: {format_price(swing_low)} ({low_date}) -> "
+        f"{format_price(swing_high)} ({high_date})"
+    )
+
+
 def get_market_cap(ticker: str) -> float | None:
     cached = get_cached_market_cap(
         ticker,
@@ -306,7 +357,11 @@ def get_daily_filter_metrics(ticker: str) -> dict:
         ticker,
         max_age_hours=DAILY_FILTER_CACHE_HOURS,
     )
-    if cached is not None:
+    if (
+        cached is not None
+        and cached.get("golden_pocket_lower") is not None
+        and cached.get("golden_pocket_upper") is not None
+    ):
         return cached
 
     raw = fetch_stock_history(
@@ -342,6 +397,15 @@ def prepare_daily_filter_candidate(result: dict) -> bool:
         result["value_ma"] = metrics.get("value_ma")
         result["history_days"] = metrics.get("history_days")
         result["enough_history"] = metrics.get("enough_history")
+        result["swing_low"] = metrics.get("swing_low")
+        result["swing_high"] = metrics.get("swing_high")
+        result["swing_low_date"] = metrics.get("swing_low_date")
+        result["swing_high_date"] = metrics.get("swing_high_date")
+        result["golden_pocket_lower"] = metrics.get("golden_pocket_lower")
+        result["golden_pocket_upper"] = metrics.get("golden_pocket_upper")
+        result["golden_pocket_lookback"] = metrics.get(
+            "golden_pocket_lookback"
+        )
 
     result["_daily_filter_checked"] = True
     result["_daily_filter_eligible"] = eligible
@@ -437,7 +501,8 @@ def format_alert(result: dict) -> str:
         f"Vol MA10/MA100: {format_num(result.get('volume_ma_ratio'), 'x')}\n"
         f"Value MA5: {format_rupiah_compact(result.get('value_ma'))}\n"
         f"Number of Shareholders: "
-        f"{format_shareholder_count(result.get('shareholder_count'))}\n\n"
+        f"{format_shareholder_count(result.get('shareholder_count'))}\n"
+        f"{format_golden_pocket(result)}\n\n"
         f"Daily: {format_num(result.get('daily_change_pct'), '%')}\n"
         f"Interval: {format_num(result.get('interval_return_pct'), '%')}\n"
         f"Volume: {format_num(result.get('volume_spike'), 'x')}\n"
@@ -881,6 +946,11 @@ def run_once() -> None:
                     "daily_change_pct": result.get("daily_change_pct"),
                     "interval_return_pct": result.get("interval_return_pct"),
                     "shareholder_count": result.get("shareholder_count"),
+                    "golden_pocket_lower": result.get("golden_pocket_lower"),
+                    "golden_pocket_upper": result.get("golden_pocket_upper"),
+                    "golden_pocket_lookback": result.get(
+                        "golden_pocket_lookback"
+                    ),
                 },
             )
             delivery = send_telegram(format_alert(result))
