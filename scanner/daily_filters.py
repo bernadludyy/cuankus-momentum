@@ -73,7 +73,12 @@ def _compute_bullish_golden_pocket(
     usable = [
         row
         for row in rows[-max(2, int(lookback)):]
-        if row.get("high") is not None and row.get("low") is not None
+        if (
+            row.get("high") is not None
+            and row.get("low") is not None
+            and float(row["high"]) > 0
+            and float(row["low"]) > 0
+        )
     ]
 
     if len(usable) < 2:
