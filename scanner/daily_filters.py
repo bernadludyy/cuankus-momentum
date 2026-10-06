@@ -14,6 +14,7 @@ from config import (
 
 WIB = timezone(timedelta(hours=7))
 GOLDEN_POCKET_LOOKBACK = 20
+GOLDEN_POCKET_TACTICAL_LOOKBACK = 5
 GOLDEN_POCKET_FIB_UPPER = 0.618
 GOLDEN_POCKET_FIB_LOWER = 0.650
 
@@ -172,6 +173,21 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
     required = max(VOLUME_MA_LONG, VALUE_MA_WINDOW)
     history_days = len(rows)
     golden = _compute_bullish_golden_pocket(rows)
+    tactical_raw = _compute_bullish_golden_pocket(
+        rows,
+        lookback=GOLDEN_POCKET_TACTICAL_LOOKBACK,
+    )
+    tactical_golden = {
+        "swing_low_5d": tactical_raw["swing_low"],
+        "swing_high_5d": tactical_raw["swing_high"],
+        "swing_low_date_5d": tactical_raw["swing_low_date"],
+        "swing_high_date_5d": tactical_raw["swing_high_date"],
+        "golden_pocket_lower_5d": tactical_raw["golden_pocket_lower"],
+        "golden_pocket_upper_5d": tactical_raw["golden_pocket_upper"],
+        "golden_pocket_lookback_5d": tactical_raw[
+            "golden_pocket_lookback"
+        ],
+    }
 
     if history_days < required:
         return {
@@ -182,6 +198,7 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
             "value_ma": None,
             "enough_history": False,
             **golden,
+            **tactical_golden,
         }
 
     short_volumes = [x["volume"] for x in rows[-VOLUME_MA_SHORT:]]
@@ -206,6 +223,7 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
         "value_ma": value_ma,
         "enough_history": True,
         **golden,
+        **tactical_golden,
     }
 
 
