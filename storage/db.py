@@ -106,10 +106,37 @@ def init_db() -> None:
             value_ma REAL,
             history_days INTEGER NOT NULL,
             enough_history INTEGER NOT NULL,
+            swing_low REAL,
+            swing_high REAL,
+            swing_low_date TEXT,
+            swing_high_date TEXT,
+            golden_pocket_lower REAL,
+            golden_pocket_upper REAL,
+            golden_pocket_lookback INTEGER,
             ts TEXT NOT NULL
         )
         """
     )
+
+    # Backward-compatible cache migration for Golden Pocket fields.
+    daily_filter_columns = {
+        row["name"]
+        for row in cur.execute("PRAGMA table_info(daily_filter_cache)").fetchall()
+    }
+    for column_name, column_type in (
+        ("swing_low", "REAL"),
+        ("swing_high", "REAL"),
+        ("swing_low_date", "TEXT"),
+        ("swing_high_date", "TEXT"),
+        ("golden_pocket_lower", "REAL"),
+        ("golden_pocket_upper", "REAL"),
+        ("golden_pocket_lookback", "INTEGER"),
+    ):
+        if column_name not in daily_filter_columns:
+            cur.execute(
+                f"ALTER TABLE daily_filter_cache "
+                f"ADD COLUMN {column_name} {column_type}"
+            )
 
     cur.execute(
         """
@@ -383,6 +410,13 @@ def get_cached_daily_filter(
             value_ma,
             history_days,
             enough_history,
+            swing_low,
+            swing_high,
+            swing_low_date,
+            swing_high_date,
+            golden_pocket_lower,
+            golden_pocket_upper,
+            golden_pocket_lookback,
             ts
         FROM daily_filter_cache
         WHERE ticker = ?
@@ -408,6 +442,13 @@ def get_cached_daily_filter(
         "value_ma": row["value_ma"],
         "history_days": int(row["history_days"]),
         "enough_history": bool(row["enough_history"]),
+        "swing_low": row["swing_low"],
+        "swing_high": row["swing_high"],
+        "swing_low_date": row["swing_low_date"],
+        "swing_high_date": row["swing_high_date"],
+        "golden_pocket_lower": row["golden_pocket_lower"],
+        "golden_pocket_upper": row["golden_pocket_upper"],
+        "golden_pocket_lookback": row["golden_pocket_lookback"],
     }
 
 
@@ -423,9 +464,16 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
             value_ma,
             history_days,
             enough_history,
+            swing_low,
+            swing_high,
+            swing_low_date,
+            swing_high_date,
+            golden_pocket_lower,
+            golden_pocket_upper,
+            golden_pocket_lookback,
             ts
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(ticker) DO UPDATE SET
             volume_ma_short = excluded.volume_ma_short,
             volume_ma_long = excluded.volume_ma_long,
@@ -433,6 +481,13 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
             value_ma = excluded.value_ma,
             history_days = excluded.history_days,
             enough_history = excluded.enough_history,
+            swing_low = excluded.swing_low,
+            swing_high = excluded.swing_high,
+            swing_low_date = excluded.swing_low_date,
+            swing_high_date = excluded.swing_high_date,
+            golden_pocket_lower = excluded.golden_pocket_lower,
+            golden_pocket_upper = excluded.golden_pocket_upper,
+            golden_pocket_lookback = excluded.golden_pocket_lookback,
             ts = excluded.ts
         """,
         (
@@ -443,6 +498,17 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
             metrics.get("value_ma"),
             int(metrics.get("history_days") or 0),
             1 if metrics.get("enough_history") else 0,
+            metrics.get("swing_low"),
+            metrics.get("swing_high"),
+            metrics.get("swing_low_date"),
+            metrics.get("swing_high_date"),
+            metrics.get("golden_pocket_lower"),
+            metrics.get("golden_pocket_upper"),
+            (
+                int(metrics.get("golden_pocket_lookback"))
+                if metrics.get("golden_pocket_lookback") is not None
+                else None
+            ),
             now_wib_iso(),
         ),
     )

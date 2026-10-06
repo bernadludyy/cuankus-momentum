@@ -13,6 +13,9 @@ from config import (
 )
 
 WIB = timezone(timedelta(hours=7))
+GOLDEN_POCKET_LOOKBACK = 20
+GOLDEN_POCKET_FIB_UPPER = 0.618
+GOLDEN_POCKET_FIB_LOWER = 0.650
 
 
 def _number(value: Any) -> float | None:
@@ -56,14 +59,82 @@ def _extract_items(payload: Any) -> list[dict]:
     return []
 
 
+def _compute_bullish_golden_pocket(
+    rows: list[dict],
+    lookback: int = GOLDEN_POCKET_LOOKBACK,
+) -> dict:
+    """Find the strongest recent bullish low->high impulse and its Fib pocket.
+
+    The pocket is informational only. For a bullish impulse:
+    0.618 level = swing_high - range * 0.618
+    0.650 level = swing_high - range * 0.650
+    """
+    usable = [
+        row
+        for row in rows[-max(2, int(lookback)):]
+        if row.get("high") is not None and row.get("low") is not None
+    ]
+
+    if len(usable) < 2:
+        return {
+            "swing_low": None,
+            "swing_high": None,
+            "swing_low_date": None,
+            "swing_high_date": None,
+            "golden_pocket_lower": None,
+            "golden_pocket_upper": None,
+            "golden_pocket_lookback": int(lookback),
+        }
+
+    best: tuple[float, dict, dict] | None = None
+
+    for i, low_row in enumerate(usable[:-1]):
+        low = float(low_row["low"])
+        for high_row in usable[i + 1:]:
+            high = float(high_row["high"])
+            impulse = high - low
+            if impulse <= 0:
+                continue
+            if best is None or impulse > best[0]:
+                best = (impulse, low_row, high_row)
+
+    if best is None:
+        return {
+            "swing_low": None,
+            "swing_high": None,
+            "swing_low_date": None,
+            "swing_high_date": None,
+            "golden_pocket_lower": None,
+            "golden_pocket_upper": None,
+            "golden_pocket_lookback": int(lookback),
+        }
+
+    impulse, low_row, high_row = best
+    swing_low = float(low_row["low"])
+    swing_high = float(high_row["high"])
+
+    pocket_618 = swing_high - impulse * GOLDEN_POCKET_FIB_UPPER
+    pocket_650 = swing_high - impulse * GOLDEN_POCKET_FIB_LOWER
+
+    return {
+        "swing_low": swing_low,
+        "swing_high": swing_high,
+        "swing_low_date": str(low_row["date"]),
+        "swing_high_date": str(high_row["date"]),
+        "golden_pocket_lower": min(pocket_650, pocket_618),
+        "golden_pocket_upper": max(pocket_650, pocket_618),
+        "golden_pocket_lookback": int(lookback),
+    }
+
+
 def compute_daily_filter_metrics(payload: Any) -> dict:
-    """Compute MA filters from completed IDX daily sessions only.
+    """Compute liquidity MAs and Golden Pocket from completed daily sessions.
 
     Current calendar day is excluded because Bot 4 runs intraday and today's
-    daily volume/value are still incomplete.
+    daily candle is incomplete.
     """
     today = datetime.now(WIB).date()
-    rows: list[tuple] = []
+    rows: list[dict] = []
 
     for item in _extract_items(payload):
         raw_date = item.get("date") or item.get("Date")
@@ -80,16 +151,27 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
 
         volume = _number(item.get("volume", item.get("Volume")))
         value = _number(item.get("value", item.get("Value")))
+        high = _number(item.get("high", item.get("High")))
+        low = _number(item.get("low", item.get("Low")))
 
         if volume is None or value is None:
             continue
 
-        rows.append((trade_date, volume, value))
+        rows.append(
+            {
+                "date": trade_date.isoformat(),
+                "volume": volume,
+                "value": value,
+                "high": high,
+                "low": low,
+            }
+        )
 
-    rows.sort(key=lambda x: x[0])
+    rows.sort(key=lambda x: x["date"])
 
     required = max(VOLUME_MA_LONG, VALUE_MA_WINDOW)
     history_days = len(rows)
+    golden = _compute_bullish_golden_pocket(rows)
 
     if history_days < required:
         return {
@@ -99,11 +181,12 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
             "volume_ma_ratio": None,
             "value_ma": None,
             "enough_history": False,
+            **golden,
         }
 
-    short_volumes = [x[1] for x in rows[-VOLUME_MA_SHORT:]]
-    long_volumes = [x[1] for x in rows[-VOLUME_MA_LONG:]]
-    recent_values = [x[2] for x in rows[-VALUE_MA_WINDOW:]]
+    short_volumes = [x["volume"] for x in rows[-VOLUME_MA_SHORT:]]
+    long_volumes = [x["volume"] for x in rows[-VOLUME_MA_LONG:]]
+    recent_values = [x["value"] for x in rows[-VALUE_MA_WINDOW:]]
 
     volume_ma_short = sum(short_volumes) / len(short_volumes)
     volume_ma_long = sum(long_volumes) / len(long_volumes)
@@ -122,6 +205,7 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
         "volume_ma_ratio": volume_ma_ratio,
         "value_ma": value_ma,
         "enough_history": True,
+        **golden,
     }
 
 
