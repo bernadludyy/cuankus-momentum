@@ -151,14 +151,18 @@ def format_signed_pct(value) -> str:
 def format_market_cap(value) -> str:
     if value is None:
         return "-"
-    value = float(value)
-    if value >= 1e12:
-        return f"Rp{value / 1e12:.2f}T"
-    if value >= 1e9:
-        return f"Rp{value / 1e9:.2f}B"
-    if value >= 1e6:
-        return f"Rp{value / 1e6:.2f}M"
-    return f"Rp{value:,.0f}"
+
+    number = float(value)
+    sign = "-" if number < 0 else ""
+    amount = abs(number)
+
+    if amount >= 1e12:
+        return f"{sign}Rp{amount / 1e12:.2f}T"
+    if amount >= 1e9:
+        return f"{sign}Rp{amount / 1e9:.2f}B"
+    if amount >= 1e6:
+        return f"{sign}Rp{amount / 1e6:.2f}M"
+    return f"{sign}Rp{amount:,.0f}"
 
 
 def format_rupiah_compact(value) -> str:
@@ -186,14 +190,18 @@ def format_golden_pocket(result: dict, suffix: str = "") -> str:
         result.get(metric_key("golden_pocket_lookback"))
         or default_lookback
     )
-    scope = "Tactical" if suffix == "5d" else "Structural"
-    position_label = f"GP {lookback}D Position"
-    swing_label = f"Swing {lookback}D"
+    scope = "TACTICAL" if suffix == "5d" else "STRUCTURAL"
+    section_icon = "🟡" if suffix == "5d" else "🟠"
+    heading = f"{section_icon} GOLDEN POCKET — {scope} {lookback}D"
 
     if lower is None or upper is None:
         return (
-            f"Golden Pocket {scope} (0.618-0.650, {lookback}D): -\n"
-            f"{position_label}: -"
+            f"{heading}\n"
+            "Fib Ratio: 0.618–0.650\n"
+            "Zone: -\n"
+            "Position: -\n"
+            "Swing: -\n"
+            "Period: -"
         )
 
     lower = float(lower)
@@ -210,7 +218,7 @@ def format_golden_pocket(result: dict, suffix: str = "") -> str:
             position = f"ABOVE +{distance:.2f}%"
         else:
             distance = ((lower - price) / price * 100) if price else 0.0
-            position = f"BELOW {distance:.2f}% to zone"
+            position = f"BELOW {distance:.2f}% TO ZONE"
 
     swing_low = result.get(metric_key("swing_low"))
     swing_high = result.get(metric_key("swing_high"))
@@ -218,11 +226,12 @@ def format_golden_pocket(result: dict, suffix: str = "") -> str:
     high_date = result.get(metric_key("swing_high_date")) or "-"
 
     return (
-        f"Golden Pocket {scope} (0.618-0.650, {lookback}D): "
-        f"{format_price(lower)}-{format_price(upper)}\n"
-        f"{position_label}: {position}\n"
-        f"{swing_label}: {format_price(swing_low)} ({low_date}) -> "
-        f"{format_price(swing_high)} ({high_date})"
+        f"{heading}\n"
+        "Fib Ratio: 0.618–0.650\n"
+        f"Zone: {format_price(lower)} – {format_price(upper)}\n"
+        f"Position: {position}\n"
+        f"Swing: {format_price(swing_low)} → {format_price(swing_high)}\n"
+        f"Period: {low_date} → {high_date}"
     )
 
 
@@ -371,6 +380,10 @@ def get_daily_filter_metrics(ticker: str) -> dict:
         cached is not None
         and cached.get("golden_pocket_lookback") == 20
         and cached.get("golden_pocket_lookback_5d") == 5
+        and cached.get("swing_low") not in (0, 0.0)
+        and cached.get("swing_high") not in (0, 0.0)
+        and cached.get("swing_low_5d") not in (0, 0.0)
+        and cached.get("swing_high_5d") not in (0, 0.0)
     ):
         return cached
 
@@ -506,27 +519,38 @@ def format_alert(result: dict) -> str:
     reasons = "\n".join(
         f"• {x}" for x in result.get("reasons", [])[:5]
     )
+    reasons_section = (
+        f"\n\n🧭 SIGNAL REASONS\n{reasons}"
+        if reasons
+        else ""
+    )
 
     return (
-        f"{icon} {title}\n\n"
-        f"{result['ticker']} | Price: {result.get('price')}\n"
+        f"{icon} {title}\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"📌 {result['ticker']} | Price: {format_price(result.get('price'))}\n\n"
+        "📊 SIGNAL SCORE\n"
         f"Score: {result['score']}/100\n"
         f"Leakage: {result['leakage_score']}/100\n"
         f"Momentum: {result['momentum_score']}/100\n"
-        f"Ignition: {format_num(result.get('ignition_score'), '/100')}\n"
+        f"Ignition: {format_num(result.get('ignition_score'), '/100')}\n\n"
+        "🌍 FUNDAMENTAL & FLOW\n"
         f"Market Cap: {format_market_cap(result.get('market_cap'))}\n"
-        f"Foreign Score: {format_num(result.get('foreign_score'), '/100')} "
-        f"({result.get('foreign_status') or 'UNAVAILABLE'})\n"
-        f"Net Foreign Value: {format_rupiah_compact(result.get('net_foreign_value'))}\n"
-        f"Net Foreign Ratio: {format_signed_pct(result.get('net_foreign_ratio_pct'))}\n"
+        f"Foreign Score: {format_num(result.get('foreign_score'), '/100')}\n"
+        f"Foreign Status: {result.get('foreign_status') or 'UNAVAILABLE'}\n"
+        f"Net Foreign Value: "
+        f"{format_rupiah_compact(result.get('net_foreign_value'))}\n"
+        f"Net Foreign Ratio: "
+        f"{format_signed_pct(result.get('net_foreign_ratio_pct'))}\n"
         f"Foreign Buy Dominance: "
         f"{format_num(result.get('foreign_buy_dominance_pct'), '%')}\n"
         f"Vol MA10/MA100: {format_num(result.get('volume_ma_ratio'), 'x')}\n"
         f"Value MA5: {format_rupiah_compact(result.get('value_ma'))}\n"
         f"Number of Shareholders: "
-        f"{format_shareholder_count(result.get('shareholder_count'))}\n"
-        f"{format_golden_pocket(result, suffix='5d')}\n"
+        f"{format_shareholder_count(result.get('shareholder_count'))}\n\n"
+        f"{format_golden_pocket(result, suffix='5d')}\n\n"
         f"{format_golden_pocket(result)}\n\n"
+        "⚡ LIVE MOMENTUM\n"
         f"Daily: {format_num(result.get('daily_change_pct'), '%')}\n"
         f"Interval: {format_num(result.get('interval_return_pct'), '%')}\n"
         f"Volume: {format_num(result.get('volume_spike'), 'x')}\n"
@@ -536,9 +560,9 @@ def format_alert(result: dict) -> str:
         f"Microstructure: {format_num(result.get('micro_score'), '/100')}\n"
         f"Aggressive Buy: "
         f"{format_num((result.get('aggressive_buy_ratio') or 0) * 100, '%')}\n"
-        f"Bid Dominance: {format_num(result.get('bid_percent'), '%')}\n\n"
-        f"{reasons}\n\n"
-        "Status: scanner signal, bukan jaminan harga akan naik."
+        f"Bid Dominance: {format_num(result.get('bid_percent'), '%')}"
+        f"{reasons_section}\n\n"
+        "⚠️ Scanner signal, bukan jaminan harga akan naik."
     )
 
 
