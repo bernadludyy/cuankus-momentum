@@ -27,9 +27,14 @@ permissions:
 jobs:
   export:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     env:
       PROJECT_FABRIC_DATABASE_URL: ${{ secrets.PROJECT_FABRIC_DATABASE_URL }}
+      PROJECT_FABRIC_CACHE_NAMESPACE: shared-v1
+      PROJECT_FABRIC_DB_REQUIRED: "true"
+      ZPI_API_KEY: ${{ secrets.ZPI_API_KEY }}
+      ZPI_BASE_URL: https://api.zapi.ink/v1/finance:pluang
+      ZPI_IDX_BASE_URL: https://api.zapi.ink/v1/finance:idx
 
     steps:
       - name: Checkout
@@ -48,14 +53,15 @@ jobs:
           restore-keys: |
             cuankus-momentum-db-
 
-      - name: Install database driver
-        run: pip install "psycopg[binary]>=3.1,<4"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
       - name: Export successful Telegram deliveries
         run: |
           python scripts/export_bot4_alerts.py \
             --start-date "${{ github.event.inputs.start_date || '2026-10-02' }}" \
             --end-date "${{ github.event.inputs.end_date || '2026-10-06' }}" \
+            --scanner-db "data/cuankus_momentum.db" \
             --output "artifacts/bot4-alerts-2026-10-02-to-2026-10-06.json"
 
       - name: Upload export
