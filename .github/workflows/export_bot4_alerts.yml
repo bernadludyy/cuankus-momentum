@@ -35,6 +35,7 @@ jobs:
       ZPI_API_KEY: ${{ secrets.ZPI_API_KEY }}
       ZPI_BASE_URL: https://api.zapi.ink/v1/finance:pluang
       ZPI_IDX_BASE_URL: https://api.zapi.ink/v1/finance:idx
+      PYTHONPATH: "."
 
     steps:
       - name: Checkout
