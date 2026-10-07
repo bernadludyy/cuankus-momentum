@@ -1,5 +1,5 @@
 from bot.notifier import send_telegram
-from main import format_alert
+from main import format_alert, format_flow_alert
 
 
 sample_result = {
@@ -10,6 +10,15 @@ sample_result = {
     "leakage_score": 27.2,
     "momentum_score": 83.8,
     "ignition_score": 90.0,
+    "flow_pre_score": 82.0,
+    "flow_score": 86.4,
+    "flow_status": "STRONG FLOW CONFLUENCE",
+    "flow_reasons": [
+        "Foreign flow kuat 92.0/100",
+        "Microstructure kuat 80.0/100",
+        "Aggressive buy 75%",
+        "Bid dominance 65%",
+    ],
     "market_cap": 1_240_000_000_000,
     "foreign_score": 27.0,
     "foreign_status": "FORMAT PREVIEW",
@@ -48,22 +57,31 @@ sample_result = {
     ],
 }
 
-message = (
-    "🧪 FORMAT PREVIEW BOT 4 — BUKAN SINYAL\n\n"
-    + format_alert(sample_result)
-)
+messages = [
+    (
+        "🧪 FORMAT PREVIEW BOT 4 — SCREENER 1 — BUKAN SINYAL\n\n"
+        + format_alert(sample_result)
+    ),
+    (
+        "🧪 FORMAT PREVIEW BOT 4 — SCREENER 2 — BUKAN SINYAL\n\n"
+        + format_flow_alert(sample_result, 1)
+    ),
+]
 
-result = send_telegram(message)
+all_ok = True
+for index, message in enumerate(messages, start=1):
+    result = send_telegram(message)
+    print(f"TELEGRAM FORMAT PREVIEW {index} RESULT")
+    print(f"ok={result.get('ok')}")
+    print(f"sent={result.get('sent')}")
+    print(f"failed={result.get('failed')}")
 
-print("TELEGRAM FORMAT PREVIEW RESULT")
-print(f"ok={result.get('ok')}")
-print(f"sent={result.get('sent')}")
-print(f"failed={result.get('failed')}")
+    if result.get("errors"):
+        print("ERRORS:")
+        for item in result["errors"]:
+            print(item["error"])
 
-if result.get("errors"):
-    print("ERRORS:")
-    for item in result["errors"]:
-        print(item["error"])
+    all_ok = all_ok and bool(result.get("ok"))
 
-if not result.get("ok"):
+if not all_ok:
     raise SystemExit(1)
