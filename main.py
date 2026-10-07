@@ -16,6 +16,11 @@ from config import (
     IGNITION_MAX_DAILY_CHANGE_PCT,
     MICRO_MAX_CANDIDATES,
     MICRO_MIN_PRE_SCORE,
+    FLOW_SCREENER_ENABLED,
+    FLOW_RESERVED_SLOTS,
+    FLOW_PRE_MIN_SCORE,
+    FLOW_ALERT_THRESHOLD,
+    FLOW_ALERT_COOLDOWN_MINUTES,
     MARKET_CAP_FILTER_ENABLED,
     MIN_MARKET_CAP_IDR,
     MAX_MARKET_CAP_IDR,
@@ -37,6 +42,7 @@ from config import (
     TOP_MOVER_COUNT,
     USE_MULTI_QUOTE,
 )
+from scanner.confluence import score_flow_pre, score_flow_final
 from scanner.daily_filters import (
     compute_daily_filter_metrics,
     daily_filter_is_eligible,
@@ -70,6 +76,8 @@ from storage.db import (
     save_market_cap,
     save_shareholder_filter,
     save_snapshot,
+    recent_screener_alert_exists,
+    save_screener_alert,
 )
 
 
@@ -466,6 +474,7 @@ def add_eligible_from_pool(
     selected_tickers: set[str],
     pool: list[dict],
     limit: int,
+    screener_tag: str = "LEGACY",
 ) -> int:
     """Fill slots only with price, market-cap, daily, and shareholder-eligible tickers."""
     added = 0
@@ -495,6 +504,9 @@ def add_eligible_from_pool(
         if not prepare_shareholder_candidate(result):
             continue
 
+        tags = set(result.get("_selected_by") or [])
+        tags.add(screener_tag)
+        result["_selected_by"] = sorted(tags)
         selected.append(result)
         selected_tickers.add(ticker)
         added += 1
@@ -563,6 +575,35 @@ def format_alert(result: dict) -> str:
         f"Bid Dominance: {format_num(result.get('bid_percent'), '%')}"
         f"{reasons_section}\n\n"
         "⚠️ Scanner signal, bukan jaminan harga akan naik."
+    )
+
+
+def format_flow_alert(result: dict, rank: int) -> str:
+    reasons = "\n".join(
+        f"• {x}" for x in result.get("flow_reasons", [])[:5]
+    )
+    reasons_section = f"\n{reasons}" if reasons else ""
+
+    return (
+        f"🟣 FLOW CONFLUENCE #{rank}\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"📌 {result['ticker']} | Price: {format_price(result.get('price'))}\n\n"
+        "📊 SCREENER 2 — FLOW SCORE\n"
+        f"Flow Score: {format_num(result.get('flow_score'), '/100')}\n"
+        f"Flow Status: {result.get('flow_status') or 'NONE'}\n"
+        f"Pre-Score: {format_num(result.get('flow_pre_score'), '/100')}\n"
+        f"Legacy Score: {format_num(result.get('score'), '/100')}\n\n"
+        "🌍 FLOW & MICROSTRUCTURE\n"
+        f"Foreign Score: {format_num(result.get('foreign_score'), '/100')}\n"
+        f"Net Foreign Value: {format_rupiah_compact(result.get('net_foreign_value'))}\n"
+        f"Microstructure: {format_num(result.get('micro_score'), '/100')}\n"
+        f"Aggressive Buy: "
+        f"{format_num((result.get('aggressive_buy_ratio') or 0) * 100, '%')}\n"
+        f"Bid Dominance: {format_num(result.get('bid_percent'), '%')}\n"
+        f"Volume Spike: {format_num(result.get('volume_spike'), 'x')}\n"
+        f"Activity Spike: {format_num(result.get('activity_spike'), 'x')}"
+        f"{reasons_section}\n\n"
+        "ℹ️ Screener 2 memakai data yang sama; tidak menambah slot micro/ZAPI."
     )
 
 
@@ -760,9 +801,27 @@ def run_once() -> None:
         reverse=True,
     )
 
+    # Screener 2: rank with a different score using data already fetched for
+    # every ticker. Reserving two slots inside the same six-slot micro budget
+    # keeps ZAPI orderbook/running-trade usage unchanged.
+    for item in analyzed:
+        item["flow_pre_score"] = score_flow_pre(item)
+
+    flow_pool = sorted(
+        [
+            x for x in analyzed
+            if (
+                FLOW_SCREENER_ENABLED
+                and float(x.get("flow_pre_score") or 0) >= FLOW_PRE_MIN_SCORE
+            )
+        ],
+        key=lambda x: float(x.get("flow_pre_score") or 0),
+        reverse=True,
+    )
+
     potential_tickers = {
         x["ticker"]
-        for x in (locked_pool + ignition_pool + normal_pool)
+        for x in (locked_pool + ignition_pool + normal_pool + flow_pool)
     }
     for ticker in potential_tickers:
         evaluation_status[ticker] = "PENDING_MICRO"
@@ -770,22 +829,28 @@ def run_once() -> None:
     selected: list[dict] = []
     selected_tickers: set[str] = set()
 
+    flow_reserve = (
+        min(max(FLOW_RESERVED_SLOTS, 0), MICRO_MAX_CANDIDATES)
+        if FLOW_SCREENER_ENABLED
+        else 0
+    )
+    legacy_capacity = max(0, MICRO_MAX_CANDIDATES - flow_reserve)
+
     ignition_reserve = min(
         max(IGNITION_RESERVED_SLOTS, 0),
-        MICRO_MAX_CANDIDATES,
+        legacy_capacity,
     )
-    general_capacity = max(
-        0,
-        MICRO_MAX_CANDIDATES - ignition_reserve,
-    )
+    legacy_general_capacity = max(0, legacy_capacity - ignition_reserve)
 
-    # Existing confirmed/locked signals may use only the non-reserved capacity
-    # first, so Ignition genuinely keeps its configured slots.
+    # Screener 1 keeps the existing momentum/ignition logic, but now owns four
+    # of the six slots. Screener 2 owns two unique slots. Total live micro calls
+    # therefore remain capped at MICRO_MAX_CANDIDATES.
     add_eligible_from_pool(
         selected,
         selected_tickers,
         locked_pool,
-        general_capacity,
+        legacy_general_capacity,
+        screener_tag="LEGACY",
     )
 
     before_ignition = len(selected)
@@ -794,6 +859,7 @@ def run_once() -> None:
         selected_tickers,
         ignition_pool,
         ignition_reserve,
+        screener_tag="LEGACY",
     )
 
     for result in selected[before_ignition:]:
@@ -804,28 +870,52 @@ def run_once() -> None:
             f"market_cap={format_market_cap(result.get('market_cap'))}"
         )
 
-    # Reclaim unused Ignition slots, prioritizing remaining locked signals.
-    remaining_slots = max(
-        0,
-        MICRO_MAX_CANDIDATES - len(selected),
-    )
+    before_flow = len(selected)
     add_eligible_from_pool(
         selected,
         selected_tickers,
-        locked_pool,
-        remaining_slots,
+        flow_pool,
+        flow_reserve,
+        screener_tag="FLOW",
     )
+    for result in selected[before_flow:]:
+        print(
+            f"[FLOW-PRE] {result['ticker']}: "
+            f"pre={format_num(result.get('flow_pre_score'), '/100')} "
+            f"foreign={format_num(result.get('foreign_score'), '/100')} "
+            f"vol={format_num(result.get('volume_spike'), 'x')}"
+        )
 
-    remaining_slots = max(
-        0,
-        MICRO_MAX_CANDIDATES - len(selected),
-    )
-    add_eligible_from_pool(
-        selected,
-        selected_tickers,
-        normal_pool,
-        remaining_slots,
-    )
+    # Reclaim any unused slot without exceeding the original six-candidate cap.
+    remaining_slots = max(0, MICRO_MAX_CANDIDATES - len(selected))
+    if remaining_slots:
+        add_eligible_from_pool(
+            selected,
+            selected_tickers,
+            locked_pool,
+            remaining_slots,
+            screener_tag="LEGACY",
+        )
+
+    remaining_slots = max(0, MICRO_MAX_CANDIDATES - len(selected))
+    if remaining_slots:
+        add_eligible_from_pool(
+            selected,
+            selected_tickers,
+            normal_pool,
+            remaining_slots,
+            screener_tag="LEGACY",
+        )
+
+    remaining_slots = max(0, MICRO_MAX_CANDIDATES - len(selected))
+    if remaining_slots:
+        add_eligible_from_pool(
+            selected,
+            selected_tickers,
+            flow_pool,
+            remaining_slots,
+            screener_tag="FLOW",
+        )
 
     # Hard-filter rejects are genuine NO_SIGNAL for Bot 4. Candidates that
     # merely lost a microstructure slot remain PENDING_MICRO.
@@ -853,6 +943,7 @@ def run_once() -> None:
     print(
         f"Microstructure candidates: {len(selected)} "
         f"(max={MICRO_MAX_CANDIDATES}, "
+        f"legacy={legacy_capacity}, flow_reserved={flow_reserve}, "
         f"ignition_reserved={ignition_reserve})"
     )
 
@@ -887,6 +978,10 @@ def run_once() -> None:
             continue
 
         result = apply_micro_confirmation(result, micro)
+        flow_score, flow_status, flow_reasons = score_flow_final(result)
+        result["flow_score"] = flow_score
+        result["flow_status"] = flow_status
+        result["flow_reasons"] = flow_reasons
 
         print(
             f"[MICRO] {ticker}: "
@@ -897,14 +992,21 @@ def run_once() -> None:
             f"{result.get('raw_trade_count')} "
             f"latest_age={format_num(result.get('latest_trade_age_minutes'), 'm')} "
             f"phase={result['phase']} "
-            f"score={result['score']}"
+            f"score={result['score']} "
+            f"flow={result.get('flow_score')}"
         )
 
-        if result["phase"] == "NONE":
+        flow_qualified = (
+            "FLOW" in (result.get("_selected_by") or [])
+            and float(result.get("flow_score") or 0) >= FLOW_ALERT_THRESHOLD
+        )
+
+        if result["phase"] == "NONE" and not flow_qualified:
             evaluation_status[ticker] = "NO_SIGNAL"
         else:
             evaluation_status[ticker] = "SIGNAL"
-            candidates.append(result)
+            if result["phase"] != "NONE":
+                candidates.append(result)
 
     candidates.sort(
         key=lambda x: x["score"],
@@ -1041,6 +1143,52 @@ def run_once() -> None:
             print(
                 f"[NO-REPEAT] {ticker} "
                 f"{result['phase']} {result['score']}"
+            )
+
+    # Screener 2 publishes at most two distinct flow candidates from the same
+    # six micro slots. It has its own cooldown/state and cannot alter legacy
+    # phase progression.
+    flow_candidates = sorted(
+        [
+            item for item in selected
+            if (
+                "FLOW" in (item.get("_selected_by") or [])
+                and float(item.get("flow_score") or 0) >= FLOW_ALERT_THRESHOLD
+            )
+        ],
+        key=lambda x: float(x.get("flow_score") or 0),
+        reverse=True,
+    )[:FLOW_RESERVED_SLOTS]
+
+    for rank, result in enumerate(flow_candidates, start=1):
+        ticker = result["ticker"]
+        if recent_screener_alert_exists(
+            "FLOW_CONFLUENCE",
+            ticker,
+            FLOW_ALERT_COOLDOWN_MINUTES,
+        ):
+            print(
+                f"[FLOW-NO-REPEAT] {ticker} "
+                f"{result.get('flow_score')}"
+            )
+            continue
+
+        delivery = send_telegram(format_flow_alert(result, rank))
+        if delivery.get("ok"):
+            save_screener_alert(
+                "FLOW_CONFLUENCE",
+                ticker,
+                float(result.get("flow_score") or 0),
+                result.get("price"),
+            )
+            print(
+                f"[FLOW-CONFLUENCE-ALERT] #{rank} {ticker} "
+                f"{result.get('flow_score')}"
+            )
+        else:
+            print(
+                f"[WARN] Flow Telegram gagal untuk {ticker}; "
+                "cooldown tidak disimpan."
             )
 
 
