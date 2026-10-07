@@ -541,7 +541,7 @@ def format_alert(result: dict) -> str:
         f"{icon} {title}\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"📌 {result['ticker']} | Price: {format_price(result.get('price'))}\n\n"
-        "📊 SIGNAL SCORE\n"
+        "📊 SCREENER 1 — MOMENTUM SCORE\n"
         f"Score: {result['score']}/100\n"
         f"Leakage: {result['leakage_score']}/100\n"
         f"Momentum: {result['momentum_score']}/100\n"
