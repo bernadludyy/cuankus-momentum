@@ -24,6 +24,7 @@ FORCE_RUN = os.getenv("FORCE_RUN", "false").lower() in {"1", "true", "yes", "y"}
 MICRO_MAX_CANDIDATES = int(os.getenv("MICRO_MAX_CANDIDATES", "6"))
 FLOW_SCREENER_ENABLED = os.getenv("FLOW_SCREENER_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
 FLOW_RESERVED_SLOTS = int(os.getenv("FLOW_RESERVED_SLOTS", "2"))
+FLOW_PRE_MIN_SCORE = float(os.getenv("FLOW_PRE_MIN_SCORE", "50"))
 FLOW_ALERT_THRESHOLD = float(os.getenv("FLOW_ALERT_THRESHOLD", "75"))
 FLOW_ALERT_COOLDOWN_MINUTES = int(os.getenv("FLOW_ALERT_COOLDOWN_MINUTES", "60"))
 MICRO_MIN_PRE_SCORE = float(os.getenv("MICRO_MIN_PRE_SCORE", "35"))
