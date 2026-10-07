@@ -1,13 +1,15 @@
 # Bot 4 — cron-job.org schedule
 
-This file is the canonical external schedule for `Cuankus Momentum Scanner`.
+This file is the canonical external schedule for `Cuankus Momentum Market Scanner`.
 The GitHub workflow itself intentionally has no native `schedule:` trigger.
+
+The old `scanner.yml` endpoint has been retired. Only Session A-F should point to `market_scanner.yml`.
 
 All cron-job.org jobs use:
 
 - Time zone: `Asia/Jakarta`
 - Method: `POST`
-- URL: `https://api.github.com/repos/bernadludyy/cuankus-momentum/actions/workflows/scanner.yml/dispatches`
+- URL: `https://api.github.com/repos/bernadludyy/cuankus-momentum/actions/workflows/market_scanner.yml/dispatches`
 - Body: `{"ref":"main"}`
 - Headers:
   - `Accept: application/vnd.github+json`
