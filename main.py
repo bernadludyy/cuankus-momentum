@@ -812,9 +812,9 @@ def run_once() -> None:
         reverse=True,
     )
 
-    # Screener 2: rank with a different score using data already fetched for
-    # every ticker. Reserving two slots inside the same six-slot micro budget
-    # keeps ZAPI orderbook/running-trade usage unchanged.
+    # Filter 2 pre-ranking is cheap and uses data already fetched for every
+    # ticker. Live microstructure is deferred until Filter 1 returns zero
+    # final valid candidates.
     for item in analyzed:
         item["flow_pre_score"] = score_flow_pre(item)
 
@@ -932,13 +932,6 @@ def run_once() -> None:
             and not result.get("_shareholder_eligible")
         ):
             evaluation_status[ticker] = "NO_SIGNAL"
-
-    print(
-        f"Microstructure candidates: {len(selected)} "
-        f"(max={MICRO_MAX_CANDIDATES}, "
-        f"legacy={legacy_capacity}, flow_reserved={flow_reserve}, "
-        f"ignition_reserved={ignition_reserve})"
-    )
 
     candidates: list[dict] = []
 
