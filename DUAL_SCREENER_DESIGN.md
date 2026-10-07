@@ -1,25 +1,32 @@
-# Bot 4 Dual-Screener Design
+# Bot 4 Cascading Dual-Screener Design
 
-Bot 4 keeps one shared market-data pass and a hard cap of six live
-microstructure candidates per scan. The second screener does not increase the
-orderbook/running-trades request budget.
+Bot 4 uses one live scan cycle with a hard cap of six microstructure candidates.
+The two screeners are sequential, not parallel.
 
-## Screener 1 — Momentum Engine
+## Stage 1 — Filter 1 / Momentum Engine
 
-This is the existing Bot 4 logic and thresholds:
+Filter 1 always runs first with the existing Bot 4 signal logic:
 - EARLY_IGNITION
 - EARLY_LEAKAGE
 - PRE_MOMENTUM
 - POWERFUL_MOMENTUM
 
-Four of the six microstructure slots are reserved for the legacy momentum
-engine. Existing scoring, phase thresholds, hard filters, Golden Pocket
-context, and alert progression are preserved.
+The existing scoring, phase thresholds, hard filters, Golden Pocket context,
+alert state, and Telegram format remain the primary path.
 
-## Screener 2 — Flow Confluence
+Four live microstructure slots are available to Filter 1. If at least one final
+valid ticker survives microstructure confirmation and the hard filters, the
+cycle stops at Filter 1 and Filter 2 is not run.
 
-Two of the same six microstructure slots are reserved for two distinct tickers
-ranked by a cheap pre-score computed from data already fetched for the universe.
+## Stage 2 — Filter 2 / Flow Confluence fallback
+
+Filter 2 starts only when Filter 1 finishes the current cycle with zero final
+valid tickers. It ranks the universe with a cheap pre-score from data already
+fetched and evaluates at most two fallback candidates.
+
+If a fallback ticker was already micro-checked in Stage 1, that result is
+reused. Otherwise Filter 2 consumes one of its two fallback microstructure
+slots. Total live microstructure candidates therefore never exceed six.
 
 ### Flow pre-score (0–100)
 
@@ -46,18 +53,18 @@ Status:
 - >=65: FLOW WATCH
 - <65: NONE
 
-Telegram threshold: 75.
-Flow alerts have their own 60-minute cooldown and do not modify Screener 1
-phase progression.
+Telegram threshold: 75. Flow alerts keep their own 60-minute cooldown and do
+not modify Filter 1 phase progression.
 
-## API and Actions budget
+## Live cadence and budget
 
-- MICRO_MAX_CANDIDATES stays 6.
-- Screener 1 owns 4 slots.
-- Screener 2 owns 2 unique slots.
-- No extra orderbook/running-trades slots are added.
-- Unused slots are reclaimed by the other pool, but the total never exceeds 6.
-- The scanner is dispatched only by the six exact IDX-session cron jobs.
-- Production workflow: `.github/workflows/market_scanner.yml`.
-- The retired `scanner.yml` endpoint is intentionally absent to block old
-  duplicate cron jobs from creating Actions runs.
+- Every scheduled cycle starts again from Filter 1.
+- Filter 2 has no persistent mode and never bypasses Filter 1.
+- MICRO_MAX_CANDIDATES remains 6.
+- Filter 1 capacity: 4 live microstructure candidates.
+- Filter 2 fallback capacity: at most 2 live microstructure candidates.
+- No separate workflow or cron job is created for Filter 2.
+- The existing six cron-job.org IDX-session schedules continue dispatching
+  `.github/workflows/market_scanner.yml` every 5 minutes during regular market
+  windows.
+- The retired `scanner.yml` endpoint remains absent to prevent duplicate runs.

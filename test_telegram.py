@@ -63,7 +63,7 @@ messages = [
         + format_alert(sample_result)
     ),
     (
-        "🧪 FORMAT PREVIEW BOT 4 — SCREENER 2 — BUKAN SINYAL\n\n"
+        "🧪 BOT 4 — FILTER 2 FALLBACK LIVE — PREVIEW, BUKAN SINYAL\n\n"
         + format_flow_alert(sample_result, 1)
     ),
 ]
