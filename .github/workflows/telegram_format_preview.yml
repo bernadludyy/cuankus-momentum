@@ -40,6 +40,9 @@ jobs:
       - name: Compile Bot 4 formatter
         run: python -m py_compile main.py scanner/*.py storage/*.py bot/*.py
 
+      - name: Run Bot 4 regression tests
+        run: python test_regressions.py
+
       - name: Send Telegram format preview
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
