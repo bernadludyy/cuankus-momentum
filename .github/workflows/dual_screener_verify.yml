@@ -1,0 +1,62 @@
+name: Dual Screener Verify
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scanner/**"
+      - "storage/**"
+      - "main.py"
+      - "config.py"
+      - "test_regressions.py"
+      - ".github/workflows/dual_screener_verify.yml"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      PROJECT_FABRIC_DATABASE_URL: ""
+      PROJECT_FABRIC_DB_REQUIRED: "false"
+      ZPI_API_KEY: "test-only"
+      ZPI_BASE_URL: "https://example.invalid"
+      TELEGRAM_BOT_TOKEN: "test-only"
+      TELEGRAM_CHAT_ID: "test-only"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Compile and regression tests
+        run: |
+          python -m py_compile main.py scanner/*.py storage/*.py bot/*.py
+          python test_regressions.py
+      - name: Validate dual-screener configuration
+        run: |
+          python - <<'PY'
+          import config
+          from scanner.confluence import score_flow_pre, score_flow_final
+          assert config.MICRO_MAX_CANDIDATES == 6
+          assert config.FLOW_RESERVED_SLOTS == 2
+          assert config.MICRO_MAX_CANDIDATES - config.FLOW_RESERVED_SLOTS == 4
+          sample = {
+              "foreign_score": 92,
+              "activity_spike": 3.0,
+              "volume_spike": 5.0,
+              "position_in_range": 0.9,
+              "interval_return_pct": 0.5,
+              "anti_falling_knife_pass": True,
+              "not_overextended": True,
+              "micro_score": 80,
+              "aggressive_buy_ratio": 0.75,
+              "bid_percent": 65,
+          }
+          pre = score_flow_pre(sample)
+          final, status, reasons = score_flow_final(sample)
+          assert pre >= config.FLOW_PRE_MIN_SCORE
+          assert final >= config.FLOW_ALERT_THRESHOLD
+          assert status != "NONE"
+          assert reasons
+          print({"legacy_slots": 4, "flow_slots": 2, "pre": pre, "final": final, "status": status})
+          PY
