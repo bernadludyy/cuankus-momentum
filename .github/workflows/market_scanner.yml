@@ -1,10 +1,6 @@
 name: Cuankus Momentum Market Scanner
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/market_scanner.yml"
   workflow_dispatch:
     inputs:
       run_tests:
