@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from scanner.market_hours import WIB
+from scanner.confluence import score_flow_pre, score_flow_final
 from scanner.foreign_score import build_foreign_metrics
 from scanner.daily_filters import compute_daily_filter_metrics
 from scanner.microstructure import (
@@ -97,6 +98,43 @@ def test_golden_pocket_from_recent_bullish_swing() -> None:
     assert metrics["golden_pocket_lookback_5d"] == 5
 
 
+def test_flow_confluence_scoring() -> None:
+    strong = {
+        "foreign_score": 90.0,
+        "activity_spike": 3.2,
+        "volume_spike": 6.5,
+        "position_in_range": 0.92,
+        "interval_return_pct": 0.80,
+        "anti_falling_knife_pass": True,
+        "not_overextended": True,
+        "micro_score": 82.0,
+        "aggressive_buy_ratio": 0.78,
+        "bid_percent": 67.0,
+    }
+    weak = {
+        "foreign_score": 35.0,
+        "activity_spike": 1.1,
+        "volume_spike": 1.2,
+        "position_in_range": 0.45,
+        "interval_return_pct": -0.10,
+        "anti_falling_knife_pass": True,
+        "not_overextended": True,
+        "micro_score": 45.0,
+        "aggressive_buy_ratio": 0.48,
+        "bid_percent": 48.0,
+    }
+
+    assert score_flow_pre(strong) > score_flow_pre(weak)
+    score, status, reasons = score_flow_final(strong)
+    assert score >= 75.0
+    assert status in {"FLOW CONFLUENCE", "STRONG FLOW CONFLUENCE"}
+    assert reasons
+
+    weak_score, weak_status, _ = score_flow_final(weak)
+    assert weak_score < 75.0
+    assert weak_status != "FLOW CONFLUENCE"
+
+
 def test_foreign_value_basis() -> None:
     row = {
         "ForeignBuy": 2_000_000,
@@ -117,5 +155,6 @@ if __name__ == "__main__":
     test_phase_hierarchy_prefers_pre_momentum_over_leakage()
     test_trade_age_parser()
     test_golden_pocket_from_recent_bullish_swing()
+    test_flow_confluence_scoring()
     test_foreign_value_basis()
     print("Regression tests passed.")
