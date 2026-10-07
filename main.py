@@ -514,6 +514,15 @@ def add_eligible_from_pool(
     return added
 
 
+def should_run_flow_fallback(primary_signal_count: int) -> bool:
+    """Run Screener 2 only when Screener 1 has zero final valid candidates."""
+    return (
+        FLOW_SCREENER_ENABLED
+        and FLOW_RESERVED_SLOTS > 0
+        and int(primary_signal_count) == 0
+    )
+
+
 def format_alert(result: dict) -> str:
     if result["phase"] == "EARLY_IGNITION":
         icon = "🔵"
@@ -586,6 +595,7 @@ def format_flow_alert(result: dict, rank: int) -> str:
     reasons_section = f"\n{reasons}" if reasons else ""
 
     return (
+        "🟡 BOT 4 — FILTER 2 / FALLBACK LIVE\n"
         f"🟣 FLOW CONFLUENCE #{rank}\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"📌 {result['ticker']} | Price: {format_price(result.get('price'))}\n\n"
@@ -604,7 +614,7 @@ def format_flow_alert(result: dict, rank: int) -> str:
         f"Volume Spike: {format_num(result.get('volume_spike'), 'x')}\n"
         f"Activity Spike: {format_num(result.get('activity_spike'), 'x')}"
         f"{reasons_section}\n\n"
-        "ℹ️ Screener 2 memakai data yang sama; tidak menambah slot micro/ZAPI."
+        "ℹ️ Filter 2 aktif hanya karena Filter 1 tidak menemukan kandidat valid pada siklus ini."
     )
 
 
@@ -802,9 +812,9 @@ def run_once() -> None:
         reverse=True,
     )
 
-    # Screener 2: rank with a different score using data already fetched for
-    # every ticker. Reserving two slots inside the same six-slot micro budget
-    # keeps ZAPI orderbook/running-trade usage unchanged.
+    # Filter 2 pre-ranking is cheap and uses data already fetched for every
+    # ticker. Live microstructure is deferred until Filter 1 returns zero
+    # final valid candidates.
     for item in analyzed:
         item["flow_pre_score"] = score_flow_pre(item)
 
@@ -827,43 +837,44 @@ def run_once() -> None:
     for ticker in potential_tickers:
         evaluation_status[ticker] = "PENDING_MICRO"
 
-    selected: list[dict] = []
-    selected_tickers: set[str] = set()
+    # Cascading scanner: Screener 1 is always evaluated first. Screener 2
+    # receives no live microstructure call unless Screener 1 finishes with
+    # zero final valid candidates. Four primary slots + at most two fallback
+    # slots keep the original hard cap of six live microstructure candidates.
+    primary_selected: list[dict] = []
+    primary_selected_tickers: set[str] = set()
 
     flow_reserve = (
         min(max(FLOW_RESERVED_SLOTS, 0), MICRO_MAX_CANDIDATES)
         if FLOW_SCREENER_ENABLED
         else 0
     )
-    legacy_capacity = max(0, MICRO_MAX_CANDIDATES - flow_reserve)
+    primary_capacity = max(0, MICRO_MAX_CANDIDATES - flow_reserve)
 
     ignition_reserve = min(
         max(IGNITION_RESERVED_SLOTS, 0),
-        legacy_capacity,
+        primary_capacity,
     )
-    legacy_general_capacity = max(0, legacy_capacity - ignition_reserve)
+    primary_general_capacity = max(0, primary_capacity - ignition_reserve)
 
-    # Screener 1 keeps the existing momentum/ignition logic, but now owns four
-    # of the six slots. Screener 2 owns two unique slots. Total live micro calls
-    # therefore remain capped at MICRO_MAX_CANDIDATES.
     add_eligible_from_pool(
-        selected,
-        selected_tickers,
+        primary_selected,
+        primary_selected_tickers,
         locked_pool,
-        legacy_general_capacity,
+        primary_general_capacity,
         screener_tag="LEGACY",
     )
 
-    before_ignition = len(selected)
+    before_ignition = len(primary_selected)
     add_eligible_from_pool(
-        selected,
-        selected_tickers,
+        primary_selected,
+        primary_selected_tickers,
         ignition_pool,
         ignition_reserve,
         screener_tag="LEGACY",
     )
 
-    for result in selected[before_ignition:]:
+    for result in primary_selected[before_ignition:]:
         print(
             f"[IGNITION-PRE] {result['ticker']}: "
             f"vol={format_num(result.get('volume_spike'), 'x')} "
@@ -871,52 +882,33 @@ def run_once() -> None:
             f"market_cap={format_market_cap(result.get('market_cap'))}"
         )
 
-    before_flow = len(selected)
-    add_eligible_from_pool(
-        selected,
-        selected_tickers,
-        flow_pool,
-        flow_reserve,
-        screener_tag="FLOW",
-    )
-    for result in selected[before_flow:]:
-        print(
-            f"[FLOW-PRE] {result['ticker']}: "
-            f"pre={format_num(result.get('flow_pre_score'), '/100')} "
-            f"foreign={format_num(result.get('foreign_score'), '/100')} "
-            f"vol={format_num(result.get('volume_spike'), 'x')}"
-        )
-
-    # Reclaim any unused slot without exceeding the original six-candidate cap.
-    remaining_slots = max(0, MICRO_MAX_CANDIDATES - len(selected))
-    if remaining_slots:
+    # Reclaim unused primary slots for Screener 1 only. Filter 2 remains fully
+    # dormant until Screener 1 has been micro-confirmed and finalized.
+    remaining_primary = max(0, primary_capacity - len(primary_selected))
+    if remaining_primary:
         add_eligible_from_pool(
-            selected,
-            selected_tickers,
+            primary_selected,
+            primary_selected_tickers,
             locked_pool,
-            remaining_slots,
+            remaining_primary,
             screener_tag="LEGACY",
         )
 
-    remaining_slots = max(0, MICRO_MAX_CANDIDATES - len(selected))
-    if remaining_slots:
+    remaining_primary = max(0, primary_capacity - len(primary_selected))
+    if remaining_primary:
         add_eligible_from_pool(
-            selected,
-            selected_tickers,
+            primary_selected,
+            primary_selected_tickers,
             normal_pool,
-            remaining_slots,
+            remaining_primary,
             screener_tag="LEGACY",
         )
 
-    remaining_slots = max(0, MICRO_MAX_CANDIDATES - len(selected))
-    if remaining_slots:
-        add_eligible_from_pool(
-            selected,
-            selected_tickers,
-            flow_pool,
-            remaining_slots,
-            screener_tag="FLOW",
-        )
+    print(
+        f"Screener 1 microstructure candidates: {len(primary_selected)} "
+        f"(primary_capacity={primary_capacity}, fallback_reserve={flow_reserve}, "
+        f"max_total={MICRO_MAX_CANDIDATES})"
+    )
 
     # Hard-filter rejects are genuine NO_SIGNAL for Bot 4. Candidates that
     # merely lost a microstructure slot remain PENDING_MICRO.
@@ -941,30 +933,21 @@ def run_once() -> None:
         ):
             evaluation_status[ticker] = "NO_SIGNAL"
 
-    print(
-        f"Microstructure candidates: {len(selected)} "
-        f"(max={MICRO_MAX_CANDIDATES}, "
-        f"legacy={legacy_capacity}, flow_reserved={flow_reserve}, "
-        f"ignition_reserved={ignition_reserve})"
-    )
-
     candidates: list[dict] = []
 
-    # The six live microstructure checks are independent network operations.
-    # Run a small bounded pool to reduce wall-clock time without increasing
-    # the number of ZAPI requests or changing any scoring logic.
-    micro_results: dict[str, dict] = {}
-    if selected:
-        worker_count = min(3, len(selected))
+    # Stage 1 — Screener 1 only.
+    primary_micro_results: dict[str, dict] = {}
+    if primary_selected:
+        worker_count = min(3, len(primary_selected))
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             future_by_ticker = {
                 executor.submit(fetch_microstructure, item["ticker"]): item["ticker"]
-                for item in selected
+                for item in primary_selected
             }
             for future in as_completed(future_by_ticker):
                 ticker = future_by_ticker[future]
                 try:
-                    micro_results[ticker] = future.result()
+                    primary_micro_results[ticker] = future.result()
                 except Exception as exc:
                     evaluation_status[ticker] = "API_FAILED"
                     print(
@@ -972,11 +955,12 @@ def run_once() -> None:
                         f"{type(exc).__name__}: {exc}"
                     )
 
-    processed_selected: list[dict] = []
+    processed_primary: list[dict] = []
+    primary_processed_by_ticker: dict[str, dict] = {}
 
-    for result in selected:
+    for result in primary_selected:
         ticker = result["ticker"]
-        micro = micro_results.get(ticker)
+        micro = primary_micro_results.get(ticker)
         if micro is None:
             continue
 
@@ -985,32 +969,23 @@ def run_once() -> None:
         result["flow_score"] = flow_score
         result["flow_status"] = flow_status
         result["flow_reasons"] = flow_reasons
-        processed_selected.append(result)
+        processed_primary.append(result)
+        primary_processed_by_ticker[ticker] = result
 
         print(
-            f"[MICRO] {ticker}: "
+            f"[MICRO-F1] {ticker}: "
             f"micro={result.get('micro_score')} "
             f"buy={format_num((result.get('aggressive_buy_ratio') or 0) * 100, '%')} "
             f"bid={format_num(result.get('bid_percent'), '%')} "
-            f"trades={result.get('trade_count')}/"
-            f"{result.get('raw_trade_count')} "
-            f"latest_age={format_num(result.get('latest_trade_age_minutes'), 'm')} "
             f"phase={result['phase']} "
-            f"score={result['score']} "
-            f"flow={result.get('flow_score')}"
+            f"score={result['score']}"
         )
 
-        flow_qualified = (
-            "FLOW" in (result.get("_selected_by") or [])
-            and float(result.get("flow_score") or 0) >= FLOW_ALERT_THRESHOLD
-        )
-
-        if result["phase"] == "NONE" and not flow_qualified:
+        if result["phase"] == "NONE":
             evaluation_status[ticker] = "NO_SIGNAL"
         else:
             evaluation_status[ticker] = "SIGNAL"
-            if result["phase"] != "NONE":
-                candidates.append(result)
+            candidates.append(result)
 
     candidates.sort(
         key=lambda x: x["score"],
@@ -1063,6 +1038,107 @@ def run_once() -> None:
 
         eligible_candidates.append(result)
         evaluation_status[ticker] = "SIGNAL"
+
+    # Stage 2 — Filter 2 / Flow Confluence. This stage is reached only when
+    # Screener 1 has zero final valid candidates after hard filters and live
+    # microstructure confirmation. The next 5-minute cycle always starts again
+    # from Screener 1; there is no persistent fallback mode.
+    processed_flow_fallback: list[dict] = []
+
+    if should_run_flow_fallback(len(eligible_candidates)):
+        print("[FLOW-FALLBACK] Filter 1 returned 0 valid candidates; starting Filter 2.")
+        flow_stage: list[dict] = []
+        flow_stage_tickers: set[str] = set()
+        flow_new_selected: list[dict] = []
+
+        for result in flow_pool:
+            if len(flow_stage) >= flow_reserve:
+                break
+
+            ticker = result["ticker"]
+            if ticker in flow_stage_tickers:
+                continue
+
+            if not price_is_eligible(result.get("price")):
+                evaluation_status[ticker] = "NO_SIGNAL"
+                continue
+            if not prepare_market_cap_candidate(result):
+                evaluation_status[ticker] = "NO_SIGNAL"
+                continue
+            if not prepare_daily_filter_candidate(result):
+                evaluation_status[ticker] = "NO_SIGNAL"
+                continue
+            if not prepare_shareholder_candidate(result):
+                evaluation_status[ticker] = "NO_SIGNAL"
+                continue
+
+            if ticker in primary_processed_by_ticker:
+                candidate = primary_processed_by_ticker[ticker]
+            elif ticker in primary_selected_tickers:
+                print(f"[FLOW-FALLBACK-SKIP-API-FAILED] {ticker}")
+                continue
+            else:
+                candidate = result
+                flow_new_selected.append(candidate)
+
+            tags = set(candidate.get("_selected_by") or [])
+            tags.add("FLOW")
+            candidate["_selected_by"] = sorted(tags)
+            flow_stage.append(candidate)
+            flow_stage_tickers.add(ticker)
+
+            print(
+                f"[FLOW-PRE] {ticker}: "
+                f"pre={format_num(candidate.get('flow_pre_score'), '/100')} "
+                f"foreign={format_num(candidate.get('foreign_score'), '/100')} "
+                f"vol={format_num(candidate.get('volume_spike'), 'x')}"
+            )
+
+        fallback_micro_results: dict[str, dict] = {}
+        if flow_new_selected:
+            worker_count = min(2, len(flow_new_selected))
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                future_by_ticker = {
+                    executor.submit(fetch_microstructure, item["ticker"]): item["ticker"]
+                    for item in flow_new_selected
+                }
+                for future in as_completed(future_by_ticker):
+                    ticker = future_by_ticker[future]
+                    try:
+                        fallback_micro_results[ticker] = future.result()
+                    except Exception as exc:
+                        evaluation_status[ticker] = "API_FAILED"
+                        print(
+                            f"[FLOW-MICRO-FAILED] {ticker}: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+
+        for result in flow_stage:
+            ticker = result["ticker"]
+
+            if ticker not in primary_processed_by_ticker:
+                micro = fallback_micro_results.get(ticker)
+                if micro is None:
+                    continue
+                result = apply_micro_confirmation(result, micro)
+                flow_score, flow_status, flow_reasons = score_flow_final(result)
+                result["flow_score"] = flow_score
+                result["flow_status"] = flow_status
+                result["flow_reasons"] = flow_reasons
+
+            evaluation_status[ticker] = "FLOW_FALLBACK"
+            processed_flow_fallback.append(result)
+            print(
+                f"[MICRO-F2] {ticker}: "
+                f"flow={result.get('flow_score')} "
+                f"status={result.get('flow_status')} "
+                f"micro={result.get('micro_score')}"
+            )
+    elif FLOW_SCREENER_ENABLED:
+        print(
+            f"[FLOW-FALLBACK-SKIP] Filter 1 has "
+            f"{len(eligible_candidates)} valid candidate(s); Filter 2 not run."
+        )
 
     # Re-arm only when a genuine no-signal observation exists. Preserve state
     # for candidates awaiting microstructure, insufficient baseline data, and
@@ -1155,16 +1231,12 @@ def run_once() -> None:
                 f"{result['phase']} {result['score']}"
             )
 
-    # Screener 2 publishes at most two distinct flow candidates from the same
-    # six micro slots. It has its own cooldown/state and cannot alter legacy
-    # phase progression.
+    # Filter 2 can publish only after the explicit fallback stage above. It
+    # never runs in parallel with a valid Filter 1 result.
     flow_candidates = sorted(
         [
-            item for item in processed_selected
-            if (
-                "FLOW" in (item.get("_selected_by") or [])
-                and float(item.get("flow_score") or 0) >= FLOW_ALERT_THRESHOLD
-            )
+            item for item in processed_flow_fallback
+            if float(item.get("flow_score") or 0) >= FLOW_ALERT_THRESHOLD
         ],
         key=lambda x: float(x.get("flow_score") or 0),
         reverse=True,
