@@ -88,6 +88,26 @@ def init_db() -> None:
 
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS screener_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            screener TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            score REAL NOT NULL,
+            price REAL
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_screener_alerts_key_ts
+        ON screener_alerts(screener, ticker, ts)
+        """
+    )
+
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS market_cap_cache (
             ticker TEXT PRIMARY KEY,
             market_cap REAL NOT NULL,
@@ -279,6 +299,57 @@ def save_alert(ticker: str, phase: str, score: float, price: float | None) -> No
     con.commit()
     con.close()
 
+
+
+def recent_screener_alert_exists(
+    screener: str,
+    ticker: str,
+    cooldown_minutes: int,
+) -> bool:
+    cutoff = datetime.now(WIB) - timedelta(minutes=cooldown_minutes)
+    con = connect()
+    row = con.execute(
+        """
+        SELECT ts
+        FROM screener_alerts
+        WHERE screener = ? AND ticker = ?
+        ORDER BY ts DESC
+        LIMIT 1
+        """,
+        (str(screener), ticker.upper()),
+    ).fetchone()
+    con.close()
+
+    if not row:
+        return False
+    try:
+        return datetime.fromisoformat(row["ts"]) >= cutoff
+    except Exception:
+        return False
+
+
+def save_screener_alert(
+    screener: str,
+    ticker: str,
+    score: float,
+    price: float | None,
+) -> None:
+    con = connect()
+    con.execute(
+        """
+        INSERT INTO screener_alerts (screener, ticker, ts, score, price)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            str(screener),
+            ticker.upper(),
+            now_wib_iso(),
+            float(score),
+            price,
+        ),
+    )
+    con.commit()
+    con.close()
 
 
 def get_signal_state(ticker: str) -> dict[str, Any] | None:
