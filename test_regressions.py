@@ -12,6 +12,7 @@ from scanner.microstructure import (
     apply_micro_confirmation,
 )
 from scanner.scoring import _gte as scoring_gte
+from main import should_run_flow_fallback
 
 
 def test_zero_is_not_missing() -> None:
@@ -135,6 +136,12 @@ def test_flow_confluence_scoring() -> None:
     assert weak_status != "FLOW CONFLUENCE"
 
 
+def test_flow_screener_is_fallback_only() -> None:
+    assert should_run_flow_fallback(0)
+    assert not should_run_flow_fallback(1)
+    assert not should_run_flow_fallback(2)
+
+
 def test_foreign_value_basis() -> None:
     row = {
         "ForeignBuy": 2_000_000,
@@ -156,5 +163,6 @@ if __name__ == "__main__":
     test_trade_age_parser()
     test_golden_pocket_from_recent_bullish_swing()
     test_flow_confluence_scoring()
+    test_flow_screener_is_fallback_only()
     test_foreign_value_basis()
     print("Regression tests passed.")
