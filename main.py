@@ -545,7 +545,8 @@ def format_alert(result: dict) -> str:
         f"Score: {result['score']}/100\n"
         f"Leakage: {result['leakage_score']}/100\n"
         f"Momentum: {result['momentum_score']}/100\n"
-        f"Ignition: {format_num(result.get('ignition_score'), '/100')}\n\n"
+        f"Ignition: {format_num(result.get('ignition_score'), '/100')}\n"
+        f"Flow Score: {format_num(result.get('flow_score'), '/100')}\n\n"
         "🌍 FUNDAMENTAL & FLOW\n"
         f"Market Cap: {format_market_cap(result.get('market_cap'))}\n"
         f"Foreign Score: {format_num(result.get('foreign_score'), '/100')}\n"
@@ -971,6 +972,8 @@ def run_once() -> None:
                         f"{type(exc).__name__}: {exc}"
                     )
 
+    processed_selected: list[dict] = []
+
     for result in selected:
         ticker = result["ticker"]
         micro = micro_results.get(ticker)
@@ -982,6 +985,7 @@ def run_once() -> None:
         result["flow_score"] = flow_score
         result["flow_status"] = flow_status
         result["flow_reasons"] = flow_reasons
+        processed_selected.append(result)
 
         print(
             f"[MICRO] {ticker}: "
@@ -1079,6 +1083,8 @@ def run_once() -> None:
         )
     )
 
+    primary_alerted_tickers: set[str] = set()
+
     for result in eligible_candidates:
         ticker = result["ticker"]
 
@@ -1129,6 +1135,7 @@ def run_once() -> None:
 
             if delivery_ok:
                 mark_alerted(result)
+                primary_alerted_tickers.add(ticker)
                 print(
                     f"[ALERT] {ticker} "
                     f"{result['phase']} {result['score']}"
@@ -1150,7 +1157,7 @@ def run_once() -> None:
     # phase progression.
     flow_candidates = sorted(
         [
-            item for item in selected
+            item for item in processed_selected
             if (
                 "FLOW" in (item.get("_selected_by") or [])
                 and float(item.get("flow_score") or 0) >= FLOW_ALERT_THRESHOLD
@@ -1162,6 +1169,9 @@ def run_once() -> None:
 
     for rank, result in enumerate(flow_candidates, start=1):
         ticker = result["ticker"]
+        if ticker in primary_alerted_tickers:
+            print(f"[FLOW-SKIP-PRIMARY-ALERT] {ticker}")
+            continue
         if recent_screener_alert_exists(
             "FLOW_CONFLUENCE",
             ticker,
