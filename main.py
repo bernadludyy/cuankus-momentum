@@ -16,11 +16,12 @@ from config import (
     IGNITION_MAX_DAILY_CHANGE_PCT,
     MICRO_MAX_CANDIDATES,
     MICRO_MIN_PRE_SCORE,
-    FLOW_SCREENER_ENABLED,
-    FLOW_RESERVED_SLOTS,
-    FLOW_PRE_MIN_SCORE,
-    FLOW_ALERT_THRESHOLD,
-    FLOW_ALERT_COOLDOWN_MINUTES,
+    FILTER2_ENABLED,
+    FILTER2_RESERVED_SLOTS,
+    FILTER2_MIN_PRE_SCORE,
+    FILTER2_DAILY_VOLUME_MA_RATIO_MIN,
+    FILTER2_IGNITION_MIN_VOLUME_SPIKE,
+    FILTER2_ALERT_COOLDOWN_MINUTES,
     MARKET_CAP_FILTER_ENABLED,
     MIN_MARKET_CAP_IDR,
     MAX_MARKET_CAP_IDR,
@@ -42,7 +43,6 @@ from config import (
     TOP_MOVER_COUNT,
     USE_MULTI_QUOTE,
 )
-from scanner.confluence import score_flow_pre, score_flow_final
 from scanner.daily_filters import (
     compute_daily_filter_metrics,
     daily_filter_is_eligible,
@@ -65,7 +65,12 @@ from scanner.market_data import (
 )
 from scanner.market_hours import is_idx_market_window
 from scanner.shareholder_filter import fetch_latest_shareholder_count
-from scanner.microstructure import apply_micro_confirmation, fetch_microstructure
+from scanner.microstructure import (
+    apply_micro_confirmation,
+    apply_relaxed_micro_confirmation,
+    fetch_microstructure,
+    relaxed_anti_falling_knife_pass,
+)
 from scanner.normalizer import extract_quotes, normalize_quote
 from storage.db import (
     get_cached_daily_filter,
@@ -120,6 +125,22 @@ def is_ignition_pre_candidate(result: dict) -> bool:
         )
         and bool(result.get("anti_falling_knife_pass"))
         and bool(result.get("not_overextended"))
+    )
+
+
+def is_filter2_pre_candidate(result: dict) -> bool:
+    """Relaxed Filter 1 candidate gate with hard falling-knife protection."""
+    if not relaxed_anti_falling_knife_pass(result):
+        return False
+
+    score = float(result.get("score") or 0)
+    volume_spike = float(result.get("volume_spike") or 0)
+    activity_spike = float(result.get("activity_spike") or 0)
+
+    return (
+        score >= FILTER2_MIN_PRE_SCORE
+        or volume_spike >= FILTER2_IGNITION_MIN_VOLUME_SPIKE
+        or activity_spike >= 1.20
     )
 
 
@@ -469,6 +490,59 @@ def prepare_daily_filter_candidate(result: dict) -> bool:
     return eligible
 
 
+def prepare_relaxed_daily_filter_candidate(result: dict) -> bool:
+    """Filter 2 liquidity gate: same daily context, lower volume-MA threshold."""
+    if not DAILY_FILTER_ENABLED:
+        return True
+
+    if result.get("_filter2_daily_checked"):
+        return bool(result.get("_filter2_daily_eligible"))
+
+    ticker = result["ticker"]
+    try:
+        metrics = get_daily_filter_metrics(ticker)
+    except Exception as exc:
+        metrics = None
+        print(f"[WARN] Filter 2 daily filter {ticker} gagal: {exc}")
+
+    if metrics:
+        for key in (
+            "volume_ma_short", "volume_ma_long", "volume_ma_ratio", "value_ma",
+            "history_days", "enough_history", "swing_low", "swing_high",
+            "swing_low_date", "swing_high_date", "golden_pocket_lower",
+            "golden_pocket_upper", "golden_pocket_lookback", "swing_low_5d",
+            "swing_high_5d", "swing_low_date_5d", "swing_high_date_5d",
+            "golden_pocket_lower_5d", "golden_pocket_upper_5d",
+            "golden_pocket_lookback_5d",
+        ):
+            result[key] = metrics.get(key)
+
+    ratio = metrics.get("volume_ma_ratio") if metrics else None
+    value_ma = metrics.get("value_ma") if metrics else None
+    enough = bool(metrics and metrics.get("enough_history"))
+    eligible = bool(
+        enough
+        and ratio is not None
+        and value_ma is not None
+        and float(ratio) >= FILTER2_DAILY_VOLUME_MA_RATIO_MIN
+        and float(value_ma) > MIN_VALUE_MA_IDR
+    )
+
+    result["_filter2_daily_checked"] = True
+    result["_filter2_daily_eligible"] = eligible
+
+    if not eligible:
+        print(
+            f"[FILTER2-DAILY-SKIP] {ticker}: "
+            f"VolMA{VOLUME_MA_SHORT}/MA{VOLUME_MA_LONG}="
+            f"{format_num(ratio, 'x')} need>={FILTER2_DAILY_VOLUME_MA_RATIO_MIN:.2f}x; "
+            f"ValueMA{VALUE_MA_WINDOW}={format_rupiah_compact(value_ma)} "
+            f"need>{format_rupiah_compact(MIN_VALUE_MA_IDR)}"
+        )
+
+    return eligible
+
+
 def add_eligible_from_pool(
     selected: list[dict],
     selected_tickers: set[str],
@@ -514,11 +588,11 @@ def add_eligible_from_pool(
     return added
 
 
-def should_run_flow_fallback(primary_signal_count: int) -> bool:
-    """Run Screener 2 only when Screener 1 has zero final valid candidates."""
+def should_run_filter2_fallback(primary_signal_count: int) -> bool:
+    """Run relaxed Filter 2 only when Filter 1 has zero final valid candidates."""
     return (
-        FLOW_SCREENER_ENABLED
-        and FLOW_RESERVED_SLOTS > 0
+        FILTER2_ENABLED
+        and FILTER2_RESERVED_SLOTS > 0
         and int(primary_signal_count) == 0
     )
 
@@ -588,35 +662,20 @@ def format_alert(result: dict) -> str:
     )
 
 
-def format_flow_alert(result: dict, rank: int) -> str:
-    reasons = "\n".join(
-        f"• {x}" for x in result.get("flow_reasons", [])[:5]
-    )
-    reasons_section = f"\n{reasons}" if reasons else ""
+def format_filter2_alert(result: dict, rank: int) -> str:
+    phase_label = {
+        "EARLY_IGNITION": "EARLY IGNITION",
+        "EARLY_LEAKAGE": "EARLY SMART-MONEY LEAKAGE",
+        "PRE_MOMENTUM": "PRE-MOMENTUM WATCH",
+        "POWERFUL_MOMENTUM": "POWERFUL MOMENTUM",
+    }.get(result.get("phase"), result.get("phase") or "RELAXED MOMENTUM")
 
     return (
-        "🟡 BOT 4 — FILTER 2 / FALLBACK LIVE\n"
-        f"🟣 FLOW CONFLUENCE #{rank}\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"📌 {result['ticker']} | Price: {format_price(result.get('price'))}\n\n"
-        "📊 SCREENER 2 — FLOW SCORE\n"
-        f"Flow Score: {format_num(result.get('flow_score'), '/100')}\n"
-        f"Flow Status: {result.get('flow_status') or 'NONE'}\n"
-        f"Pre-Score: {format_num(result.get('flow_pre_score'), '/100')}\n"
-        f"Legacy Score: {format_num(result.get('score'), '/100')}\n\n"
-        "🌍 FLOW & MICROSTRUCTURE\n"
-        f"Foreign Score: {format_num(result.get('foreign_score'), '/100')}\n"
-        f"Net Foreign Value: {format_rupiah_compact(result.get('net_foreign_value'))}\n"
-        f"Microstructure: {format_num(result.get('micro_score'), '/100')}\n"
-        f"Aggressive Buy: "
-        f"{format_num((result.get('aggressive_buy_ratio') or 0) * 100, '%')}\n"
-        f"Bid Dominance: {format_num(result.get('bid_percent'), '%')}\n"
-        f"Volume Spike: {format_num(result.get('volume_spike'), 'x')}\n"
-        f"Activity Spike: {format_num(result.get('activity_spike'), 'x')}"
-        f"{reasons_section}\n\n"
-        "ℹ️ Filter 2 aktif hanya karena Filter 1 tidak menemukan kandidat valid pada siklus ini."
+        f"🟢 BOT 4 — FILTER 2 / RELAXED MOMENTUM #{rank}\n"
+        f"Phase: {phase_label}\n"
+        "ℹ️ Threshold momentum lebih longgar; anti-falling-knife tetap wajib.\n\n"
+        + format_alert(result)
     )
-
 
 def enrich_quote_from_stock_summary(quote: dict) -> dict:
     """Backfill cumulative activity fields from IDX stock-summary."""
@@ -812,27 +871,24 @@ def run_once() -> None:
         reverse=True,
     )
 
-    # Filter 2 pre-ranking is cheap and uses data already fetched for every
-    # ticker. Live microstructure is deferred until Filter 1 returns zero
-    # final valid candidates.
-    for item in analyzed:
-        item["flow_pre_score"] = score_flow_pre(item)
-
-    flow_pool = sorted(
+    # Filter 2 is the same momentum family as Filter 1 with relaxed thresholds.
+    # It is ranked from the same intraday features and still rejects falling knives.
+    relaxed_pool = sorted(
         [
             x for x in analyzed
-            if (
-                FLOW_SCREENER_ENABLED
-                and float(x.get("flow_pre_score") or 0) >= FLOW_PRE_MIN_SCORE
-            )
+            if FILTER2_ENABLED and is_filter2_pre_candidate(x)
         ],
-        key=lambda x: float(x.get("flow_pre_score") or 0),
+        key=lambda x: (
+            float(x.get("score") or 0),
+            float(x.get("volume_spike") or 0),
+            float(x.get("activity_spike") or 0),
+        ),
         reverse=True,
     )
 
     potential_tickers = {
         x["ticker"]
-        for x in (locked_pool + ignition_pool + normal_pool + flow_pool)
+        for x in (locked_pool + ignition_pool + normal_pool + relaxed_pool)
     }
     for ticker in potential_tickers:
         evaluation_status[ticker] = "PENDING_MICRO"
@@ -844,12 +900,12 @@ def run_once() -> None:
     primary_selected: list[dict] = []
     primary_selected_tickers: set[str] = set()
 
-    flow_reserve = (
-        min(max(FLOW_RESERVED_SLOTS, 0), MICRO_MAX_CANDIDATES)
-        if FLOW_SCREENER_ENABLED
+    filter2_reserve = (
+        min(max(FILTER2_RESERVED_SLOTS, 0), MICRO_MAX_CANDIDATES)
+        if FILTER2_ENABLED
         else 0
     )
-    primary_capacity = max(0, MICRO_MAX_CANDIDATES - flow_reserve)
+    primary_capacity = max(0, MICRO_MAX_CANDIDATES - filter2_reserve)
 
     ignition_reserve = min(
         max(IGNITION_RESERVED_SLOTS, 0),
@@ -906,7 +962,7 @@ def run_once() -> None:
 
     print(
         f"Screener 1 microstructure candidates: {len(primary_selected)} "
-        f"(primary_capacity={primary_capacity}, fallback_reserve={flow_reserve}, "
+        f"(primary_capacity={primary_capacity}, fallback_reserve={filter2_reserve}, "
         f"max_total={MICRO_MAX_CANDIDATES})"
     )
 
@@ -1039,68 +1095,55 @@ def run_once() -> None:
         eligible_candidates.append(result)
         evaluation_status[ticker] = "SIGNAL"
 
-    # Stage 2 — Filter 2 / Flow Confluence. This stage is reached only when
-    # Screener 1 has zero final valid candidates after hard filters and live
-    # microstructure confirmation. The next 5-minute cycle always starts again
-    # from Screener 1; there is no persistent fallback mode.
-    processed_flow_fallback: list[dict] = []
+    # Stage 2 — relaxed clone of Filter 1. It runs only when Filter 1 has no
+    # final valid ticker. Every next cycle starts from Filter 1 again.
+    processed_filter2_fallback: list[dict] = []
 
-    if should_run_flow_fallback(len(eligible_candidates)):
-        print("[FLOW-FALLBACK] Filter 1 returned 0 valid candidates; starting Filter 2.")
-        flow_stage: list[dict] = []
-        flow_stage_tickers: set[str] = set()
-        flow_new_selected: list[dict] = []
+    if should_run_filter2_fallback(len(eligible_candidates)):
+        print("[FILTER2-FALLBACK] Filter 1 returned 0 valid candidates; starting relaxed momentum.")
+        filter2_stage: list[dict] = []
+        filter2_new_selected: list[dict] = []
+        filter2_tickers: set[str] = set()
 
-        for result in flow_pool:
-            if len(flow_stage) >= flow_reserve:
+        for result in relaxed_pool:
+            if len(filter2_stage) >= filter2_reserve:
                 break
 
             ticker = result["ticker"]
-            if ticker in flow_stage_tickers:
+            if ticker in filter2_tickers:
                 continue
-
             if not price_is_eligible(result.get("price")):
-                evaluation_status[ticker] = "NO_SIGNAL"
                 continue
             if not prepare_market_cap_candidate(result):
-                evaluation_status[ticker] = "NO_SIGNAL"
                 continue
-            if not prepare_daily_filter_candidate(result):
-                evaluation_status[ticker] = "NO_SIGNAL"
+            if not prepare_relaxed_daily_filter_candidate(result):
                 continue
             if not prepare_shareholder_candidate(result):
-                evaluation_status[ticker] = "NO_SIGNAL"
+                continue
+            if not relaxed_anti_falling_knife_pass(result):
+                print(f"[FILTER2-KNIFE-SKIP] {ticker}")
                 continue
 
-            if ticker in primary_processed_by_ticker:
-                candidate = primary_processed_by_ticker[ticker]
-            elif ticker in primary_selected_tickers:
-                print(f"[FLOW-FALLBACK-SKIP-API-FAILED] {ticker}")
-                continue
-            else:
-                candidate = result
-                flow_new_selected.append(candidate)
-
-            tags = set(candidate.get("_selected_by") or [])
-            tags.add("FLOW")
-            candidate["_selected_by"] = sorted(tags)
-            flow_stage.append(candidate)
-            flow_stage_tickers.add(ticker)
+            filter2_stage.append(result)
+            filter2_tickers.add(ticker)
+            if ticker not in primary_micro_results:
+                filter2_new_selected.append(result)
 
             print(
-                f"[FLOW-PRE] {ticker}: "
-                f"pre={format_num(candidate.get('flow_pre_score'), '/100')} "
-                f"foreign={format_num(candidate.get('foreign_score'), '/100')} "
-                f"vol={format_num(candidate.get('volume_spike'), 'x')}"
+                f"[FILTER2-PRE] {ticker}: "
+                f"score={format_num(result.get('score'), '/100')} "
+                f"vol={format_num(result.get('volume_spike'), 'x')} "
+                f"activity={format_num(result.get('activity_spike'), 'x')} "
+                f"interval={format_num(result.get('interval_return_pct'), '%')}"
             )
 
         fallback_micro_results: dict[str, dict] = {}
-        if flow_new_selected:
-            worker_count = min(2, len(flow_new_selected))
+        if filter2_new_selected:
+            worker_count = min(2, len(filter2_new_selected))
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
                 future_by_ticker = {
                     executor.submit(fetch_microstructure, item["ticker"]): item["ticker"]
-                    for item in flow_new_selected
+                    for item in filter2_new_selected
                 }
                 for future in as_completed(future_by_ticker):
                     ticker = future_by_ticker[future]
@@ -1109,34 +1152,33 @@ def run_once() -> None:
                     except Exception as exc:
                         evaluation_status[ticker] = "API_FAILED"
                         print(
-                            f"[FLOW-MICRO-FAILED] {ticker}: "
+                            f"[FILTER2-MICRO-FAILED] {ticker}: "
                             f"{type(exc).__name__}: {exc}"
                         )
 
-        for result in flow_stage:
-            ticker = result["ticker"]
+        for raw_result in filter2_stage:
+            ticker = raw_result["ticker"]
+            micro = primary_micro_results.get(ticker) or fallback_micro_results.get(ticker)
+            if micro is None:
+                continue
 
-            if ticker not in primary_processed_by_ticker:
-                micro = fallback_micro_results.get(ticker)
-                if micro is None:
-                    continue
-                result = apply_micro_confirmation(result, micro)
-                flow_score, flow_status, flow_reasons = score_flow_final(result)
-                result["flow_score"] = flow_score
-                result["flow_status"] = flow_status
-                result["flow_reasons"] = flow_reasons
+            result = apply_relaxed_micro_confirmation(raw_result, micro)
+            if result["phase"] == "NONE":
+                evaluation_status[ticker] = "NO_SIGNAL"
+            else:
+                evaluation_status[ticker] = "FILTER2_SIGNAL"
+                processed_filter2_fallback.append(result)
 
-            evaluation_status[ticker] = "FLOW_FALLBACK"
-            processed_flow_fallback.append(result)
             print(
                 f"[MICRO-F2] {ticker}: "
-                f"flow={result.get('flow_score')} "
-                f"status={result.get('flow_status')} "
-                f"micro={result.get('micro_score')}"
+                f"phase={result.get('phase')} "
+                f"score={result.get('score')} "
+                f"micro={result.get('micro_score')} "
+                f"anti_knife={result.get('anti_falling_knife_relaxed_pass')}"
             )
-    elif FLOW_SCREENER_ENABLED:
+    elif FILTER2_ENABLED:
         print(
-            f"[FLOW-FALLBACK-SKIP] Filter 1 has "
+            f"[FILTER2-FALLBACK-SKIP] Filter 1 has "
             f"{len(eligible_candidates)} valid candidate(s); Filter 2 not run."
         )
 
@@ -1231,50 +1273,68 @@ def run_once() -> None:
                 f"{result['phase']} {result['score']}"
             )
 
-    # Filter 2 can publish only after the explicit fallback stage above. It
-    # never runs in parallel with a valid Filter 1 result.
-    flow_candidates = sorted(
-        [
-            item for item in processed_flow_fallback
-            if float(item.get("flow_score") or 0) >= FLOW_ALERT_THRESHOLD
-        ],
-        key=lambda x: float(x.get("flow_score") or 0),
+    # Filter 2 has its own cooldown/state and never changes Filter 1 phase state.
+    filter2_candidates = sorted(
+        processed_filter2_fallback,
+        key=lambda x: float(x.get("score") or 0),
         reverse=True,
-    )[:FLOW_RESERVED_SLOTS]
+    )[:FILTER2_RESERVED_SLOTS]
 
-    for rank, result in enumerate(flow_candidates, start=1):
+    for rank, result in enumerate(filter2_candidates, start=1):
         ticker = result["ticker"]
-        if ticker in primary_alerted_tickers:
-            print(f"[FLOW-SKIP-PRIMARY-ALERT] {ticker}")
-            continue
         if recent_screener_alert_exists(
-            "FLOW_CONFLUENCE",
+            "FILTER2_RELAXED_MOMENTUM",
             ticker,
-            FLOW_ALERT_COOLDOWN_MINUTES,
+            FILTER2_ALERT_COOLDOWN_MINUTES,
         ):
-            print(
-                f"[FLOW-NO-REPEAT] {ticker} "
-                f"{result.get('flow_score')}"
-            )
+            print(f"[FILTER2-NO-REPEAT] {ticker} {result.get('phase')} {result.get('score')}")
             continue
 
-        delivery = send_telegram(format_flow_alert(result, rank))
-        if delivery.get("ok"):
+        signal_event_id = _OBS.record_signal(
+            signal_type=f"FILTER2_{result.get('phase')}",
+            entity=ticker,
+            score=result.get("score"),
+            status="alert_candidate",
+            payload={
+                "price": result.get("price"),
+                "micro_score": result.get("micro_score"),
+                "daily_change_pct": result.get("daily_change_pct"),
+                "interval_return_pct": result.get("interval_return_pct"),
+                "volume_spike": result.get("volume_spike"),
+                "activity_spike": result.get("activity_spike"),
+                "anti_falling_knife_pass": result.get("anti_falling_knife_relaxed_pass"),
+                "volume_ma_ratio": result.get("volume_ma_ratio"),
+                "shareholder_count": result.get("shareholder_count"),
+            },
+        )
+        delivery = send_telegram(format_filter2_alert(result, rank))
+        delivery_ok = bool(delivery.get("ok"))
+        _OBS.record_delivery(
+            channel="telegram",
+            status="success" if delivery_ok else "failed",
+            signal_event_id=signal_event_id,
+            destination="configured-telegram-targets",
+            metadata={
+                "sent": delivery.get("sent", 0),
+                "failed": delivery.get("failed", 0),
+                "signal_type": f"FILTER2_{result.get('phase')}",
+                "ticker": ticker,
+            },
+        )
+
+        if delivery_ok:
             save_screener_alert(
-                "FLOW_CONFLUENCE",
+                "FILTER2_RELAXED_MOMENTUM",
                 ticker,
-                float(result.get("flow_score") or 0),
+                float(result.get("score") or 0),
                 result.get("price"),
             )
             print(
-                f"[FLOW-CONFLUENCE-ALERT] #{rank} {ticker} "
-                f"{result.get('flow_score')}"
+                f"[FILTER2-ALERT] #{rank} {ticker} "
+                f"{result.get('phase')} {result.get('score')}"
             )
         else:
-            print(
-                f"[WARN] Flow Telegram gagal untuk {ticker}; "
-                "cooldown tidak disimpan."
-            )
+            print(f"[WARN] Filter 2 Telegram gagal untuk {ticker}; cooldown tidak disimpan.")
 
 
 if __name__ == "__main__":
