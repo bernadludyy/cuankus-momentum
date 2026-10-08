@@ -1218,8 +1218,6 @@ def run_once() -> None:
                     "foreign_score": result.get("foreign_score"),
                     "foreign_status": result.get("foreign_status"),
                     "micro_score": result.get("micro_score"),
-                    "flow_score": result.get("flow_score"),
-                    "flow_status": result.get("flow_status"),
                     "selected_by": result.get("_selected_by"),
                     "daily_change_pct": result.get("daily_change_pct"),
                     "interval_return_pct": result.get("interval_return_pct"),
