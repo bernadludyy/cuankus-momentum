@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from scanner.market_hours import WIB
+from scanner.ptsn_structure import build_ptsn_structure, format_ptsn_structure
+from bot import notifier
+from main import load_universe
 from scanner.foreign_score import build_foreign_metrics
 from scanner.daily_filters import compute_daily_filter_metrics
 from scanner.microstructure import (
@@ -239,8 +242,99 @@ def test_filter1_leakage_is_context_not_a_separate_telegram_stage() -> None:
     assert result["leakage_context"]
     assert result["phase"] == "NONE", result
 
+
+
+def _ptsn_test_snapshots() -> list[dict]:
+    start = datetime(2026, 10, 8, 9, 0, tzinfo=WIB)
+    prices = [379, 379, 380, 378, 380, 381, 382, 382, 382, 384]
+    return [
+        {"ticker": "PTSN", "ts": (start + timedelta(minutes=5 * i)).isoformat(),
+         "last": float(price)}
+        for i, price in enumerate(prices)
+    ]
+
+
+def _ptsn_test_features() -> dict:
+    return {
+        "ticker": "PTSN", "price": 384.0,
+        "daily_change_pct": 0.52, "interval_return_pct": 0.52,
+        "position_in_range": 0.78,
+        "volume_spike": 2.2, "value_spike": 1.7,
+        "frequency_spike": 1.8,
+        "anti_falling_knife_pass": True,
+        "not_overextended": True,
+    }
+
+
+def test_ptsn_structural_watch_uses_cached_snapshots() -> None:
+    watch = build_ptsn_structure(_ptsn_test_snapshots(), _ptsn_test_features())
+    assert watch is not None, "Expected a base breakout watch"
+    assert watch["stage"] == "WATCH", watch
+    assert watch["base_high"] == 382.0, watch
+    assert watch["base_low"] == 378.0, watch
+    assert watch["structure_score"] >= 60, watch
+    assert "PTSN STRUCTURAL MOMENTUM | PRIVATE" in format_ptsn_structure(watch)
+
+
+def test_ptsn_structural_confirmed_uses_existing_micro_only() -> None:
+    micro = {"micro_score": 74.0, "aggressive_buy_ratio": 0.66, "spread_pct": 0.5}
+    confirmed = build_ptsn_structure(_ptsn_test_snapshots(), _ptsn_test_features(), micro)
+    assert confirmed is not None
+    assert confirmed["stage"] == "CONFIRMED", confirmed
+    no_spike = _ptsn_test_features()
+    no_spike.update({"volume_spike": 1.0, "value_spike": 1.0, "frequency_spike": 1.0})
+    assert build_ptsn_structure(_ptsn_test_snapshots(), no_spike, micro) is None
+
+
+def test_ptsn_structural_rejects_overnight_or_midday_gap() -> None:
+    s = _ptsn_test_snapshots()
+    s[5]["ts"] = (datetime(2026, 10, 8, 13, 30, tzinfo=WIB)).isoformat()
+    assert build_ptsn_structure(s, _ptsn_test_features()) is None
+
+
+def test_ptsn_private_routing_never_reaches_group() -> None:
+    original_send = notifier._send_to_chat
+    original_chat = notifier.TELEGRAM_CHAT_ID
+    original_group = notifier.TELEGRAM_GROUP_CHAT_ID
+    original_token = notifier.TELEGRAM_BOT_TOKEN
+    original_validate = notifier.validate_telegram_config
+    try:
+        recipients = []
+        notifier._send_to_chat = lambda message, chat_id: (recipients.append(chat_id) or {"ok": True})
+        notifier.TELEGRAM_CHAT_ID = "user-private-test"
+        notifier.TELEGRAM_GROUP_CHAT_ID = "group-test"
+        notifier.TELEGRAM_BOT_TOKEN = "fake-test-token"
+        notifier.validate_telegram_config = lambda: None  # Isolate routing from secrets
+        result = notifier.send_telegram("PTSN private", target="private")
+        assert result["ok"] and recipients == ["user-private-test"], recipients
+        recipients.clear()
+        notifier.send_telegram("regular signal")
+        assert recipients == ["user-private-test", "group-test"], recipients
+        try:
+            notifier.get_telegram_targets("invalid")
+        except ValueError:
+            pass
+        else:
+            assert False, "Unknown target must be rejected"
+    finally:
+        notifier._send_to_chat = original_send
+        notifier.TELEGRAM_CHAT_ID = original_chat
+        notifier.TELEGRAM_GROUP_CHAT_ID = original_group
+        notifier.TELEGRAM_BOT_TOKEN = original_token
+        notifier.validate_telegram_config = original_validate
+
+
+def test_ptsn_added_to_static_watchlist() -> None:
+    assert "PTSN" in load_universe()
+
+
 if __name__ == "__main__":
     test_zero_is_not_missing()
+    test_ptsn_structural_watch_uses_cached_snapshots()
+    test_ptsn_structural_confirmed_uses_existing_micro_only()
+    test_ptsn_structural_rejects_overnight_or_midday_gap()
+    test_ptsn_private_routing_never_reaches_group()
+    test_ptsn_added_to_static_watchlist()
     test_phase_hierarchy_prefers_pre_momentum_over_leakage()
     test_filter1_staged_alert_order()
     test_filter1_never_skips_intermediate_stage_or_fakes_ignition()

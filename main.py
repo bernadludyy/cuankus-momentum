@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 from bot.notifier import send_telegram
+from scanner.ptsn_structure import build_ptsn_structure, format_ptsn_structure
 from project_fabric.observability import ObservabilityClient
 from config import (
     BASE_DIR,
@@ -17,6 +18,9 @@ from config import (
     MICRO_MAX_CANDIDATES,
     MICRO_MIN_PRE_SCORE,
     FILTER2_ENABLED,
+    PTSN_STRUCTURE_ENABLED,
+    PTSN_STRUCTURE_COOLDOWN_MINUTES,
+    PTSN_STRUCTURE_MAX_ALERTS_PER_CYCLE,
     FILTER2_RESERVED_SLOTS,
     FILTER2_MIN_PRE_SCORE,
     FILTER2_DAILY_VOLUME_MA_RATIO_MIN,
@@ -30,6 +34,7 @@ from config import (
     DAILY_FILTER_ENABLED,
     DAILY_FILTER_CACHE_HOURS,
     STOCK_HISTORY_LENGTH,
+    RECENT_SNAPSHOTS,
     SHAREHOLDER_FILTER_ENABLED,
     MAX_SHAREHOLDERS,
     SHAREHOLDER_CACHE_HOURS,
@@ -75,6 +80,8 @@ from scanner.microstructure import (
 from scanner.normalizer import extract_quotes, normalize_quote
 from storage.db import (
     get_cached_daily_filter,
+    get_cached_shareholder_filter,
+    get_recent_snapshots,
     get_cached_market_cap,
     get_cached_shareholder_filter,
     init_db,
@@ -587,6 +594,19 @@ def add_eligible_from_pool(
         added += 1
 
     return added
+
+
+
+def prepare_shareholder_candidate_from_cache(ticker: str) -> bool:
+    """Respect enabled shareholder hard gate without requesting extra APIs."""
+    cached = get_cached_shareholder_filter(
+        ticker,
+        success_max_age_hours=SHAREHOLDER_CACHE_HOURS,
+        failure_max_age_hours=SHAREHOLDER_FAILURE_CACHE_HOURS,
+    )
+    if not cached:
+        return False
+    return shareholder_is_eligible(cached.get("holder_count"))
 
 
 def should_run_filter2_fallback(primary_signal_count: int) -> bool:
@@ -1241,7 +1261,7 @@ def run_once() -> None:
                     ),
                 },
             )
-            delivery = send_telegram(format_alert(result))
+            delivery = send_telegram(format_alert(result), target="private" if ticker == "PTSN" else "all")
             delivery_ok = bool(delivery.get("ok"))
             _OBS.record_delivery(
                 channel="telegram",
@@ -1309,7 +1329,7 @@ def run_once() -> None:
                 "shareholder_count": result.get("shareholder_count"),
             },
         )
-        delivery = send_telegram(format_filter2_alert(result, rank))
+        delivery = send_telegram(format_filter2_alert(result, rank), target="private" if ticker == "PTSN" else "all")
         delivery_ok = bool(delivery.get("ok"))
         _OBS.record_delivery(
             channel="telegram",
@@ -1337,6 +1357,66 @@ def run_once() -> None:
             )
         else:
             print(f"[WARN] Filter 2 Telegram gagal untuk {ticker}; cooldown tidak disimpan.")
+
+
+    # Private-only PTSN-style structure watch, from snapshots already collected.
+    # It does not add another scanner workflow or request additional microstructure.
+    if PTSN_STRUCTURE_ENABLED:
+        private_candidates: list[dict] = []
+        for features in analyzed:
+            ticker = features["ticker"]
+            if not price_is_eligible(features.get("price")):
+                continue
+            if not features.get("anti_falling_knife_pass") or not features.get("not_overextended"):
+                continue
+
+            snapshots = get_recent_snapshots(ticker, RECENT_SNAPSHOTS)
+            micro = primary_micro_results.get(ticker) or fallback_micro_results.get(ticker)
+            candidate = build_ptsn_structure(snapshots, features, micro)
+            if candidate is None:
+                continue
+
+            # Cache-only guards: NO additional ZAPI calls for private momentum.
+            cap = features.get("market_cap")
+            if cap is None:
+                cap = get_cached_market_cap(ticker, max_age_hours=MARKET_CAP_CACHE_HOURS)
+            if MARKET_CAP_FILTER_ENABLED and not market_cap_is_eligible(cap):
+                continue
+
+            metrics = get_cached_daily_filter(ticker, max_age_hours=DAILY_FILTER_CACHE_HOURS)
+            if DAILY_FILTER_ENABLED and (
+                not metrics or not metrics.get("enough_history")
+                or metrics.get("value_ma") is None
+                or float(metrics["value_ma"]) <= MIN_VALUE_MA_IDR
+            ):
+                continue
+
+            if SHAREHOLDER_FILTER_ENABLED:
+                # Do not call the shareholder endpoint solely for this private watch.
+                if not prepare_shareholder_candidate_from_cache(ticker):
+                    continue
+
+            private_candidates.append(candidate)
+
+        private_candidates.sort(key=lambda x: float(x["structure_score"]), reverse=True)
+        delivered = 0
+        for candidate in private_candidates:
+            if delivered >= PTSN_STRUCTURE_MAX_ALERTS_PER_CYCLE:
+                break
+            ticker = candidate["ticker"]
+            stage = candidate["stage"]
+            cooldown_key = f"PTSN_STRUCTURE_{stage}"
+            if recent_screener_alert_exists("PTSN_STRUCTURE_CONFIRMED", ticker, 1440):
+                continue
+            if recent_screener_alert_exists(cooldown_key, ticker, PTSN_STRUCTURE_COOLDOWN_MINUTES):
+                continue
+            delivery = send_telegram(format_ptsn_structure(candidate), target="private")
+            if delivery.get("ok"):
+                save_screener_alert(cooldown_key, ticker, float(candidate["structure_score"]), candidate["price"])
+                delivered += 1
+                print(f"[PTSN-PRIVATE] {ticker} {stage} score={candidate['structure_score']}")
+            else:
+                print(f"[PTSN-PRIVATE-FAILED] {ticker}: private alert not recorded")
 
 
 if __name__ == "__main__":
