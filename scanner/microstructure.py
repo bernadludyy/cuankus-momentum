@@ -35,6 +35,8 @@ from config import (
     FILTER2_PRE_MOMENTUM_MIN_INTERVAL_RETURN_PCT,
     FILTER2_PRE_MOMENTUM_MIN_BREAKOUT_PCT,
     FILTER2_PRE_MOMENTUM_MIN_POSITION_IN_RANGE,
+    FILTER2_MIN_BREAKOUT_PCT,
+    FILTER2_MOMENTUM_MIN_INTERVAL_RETURN_PCT,
     FILTER2_IGNITION_THRESHOLD,
     FILTER2_IGNITION_MIN_VOLUME_SPIKE,
     FILTER2_IGNITION_MIN_MICRO_SCORE,
@@ -428,8 +430,8 @@ def apply_relaxed_micro_confirmation(
         safe
         and micro_score >= FILTER2_MICRO_MIN_CONFIRM_SCORE
         and momentum >= FILTER2_MOMENTUM_THRESHOLD
-        and _gte(result.get("breakout_pct"), FILTER2_PRE_MOMENTUM_MIN_BREAKOUT_PCT)
-        and _gte(result.get("interval_return_pct"), FILTER2_PRE_MOMENTUM_MIN_INTERVAL_RETURN_PCT)
+        and _gte(result.get("breakout_pct"), FILTER2_MIN_BREAKOUT_PCT)
+        and _gte(result.get("interval_return_pct"), FILTER2_MOMENTUM_MIN_INTERVAL_RETURN_PCT)
     ):
         phase = "POWERFUL_MOMENTUM"
         score = momentum
