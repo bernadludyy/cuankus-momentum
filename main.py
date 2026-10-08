@@ -53,6 +53,7 @@ from scanner.engine import (
     mark_alerted,
     mark_no_signal,
     mark_signal_present,
+    select_next_primary_phase,
     should_alert,
 )
 from scanner.market_data import (
@@ -1025,7 +1026,7 @@ def run_once() -> None:
         if micro is None:
             continue
 
-        result = apply_micro_confirmation(result, micro)
+        result = select_next_primary_phase(apply_micro_confirmation(result, micro))
         processed_primary.append(result)
         primary_processed_by_ticker[ticker] = result
 
@@ -1039,7 +1040,9 @@ def run_once() -> None:
         )
 
         if result["phase"] == "NONE":
-            evaluation_status[ticker] = "NO_SIGNAL"
+            evaluation_status[ticker] = (
+                "PENDING_PHASE" if result.get("pending_stage") else "NO_SIGNAL"
+            )
         else:
             evaluation_status[ticker] = "SIGNAL"
             candidates.append(result)
