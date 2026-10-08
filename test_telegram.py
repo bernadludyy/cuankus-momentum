@@ -1,5 +1,5 @@
 from bot.notifier import send_telegram
-from main import format_alert, format_flow_alert
+from main import format_alert, format_filter2_alert
 
 
 sample_result = {
@@ -10,15 +10,6 @@ sample_result = {
     "leakage_score": 27.2,
     "momentum_score": 83.8,
     "ignition_score": 90.0,
-    "flow_pre_score": 82.0,
-    "flow_score": 86.4,
-    "flow_status": "STRONG FLOW CONFLUENCE",
-    "flow_reasons": [
-        "Foreign flow kuat 92.0/100",
-        "Microstructure kuat 80.0/100",
-        "Aggressive buy 75%",
-        "Bid dominance 65%",
-    ],
     "market_cap": 1_240_000_000_000,
     "foreign_score": 27.0,
     "foreign_status": "FORMAT PREVIEW",
@@ -63,8 +54,8 @@ messages = [
         + format_alert(sample_result)
     ),
     (
-        "🧪 BOT 4 — FILTER 2 FALLBACK LIVE — PREVIEW, BUKAN SINYAL\n\n"
-        + format_flow_alert(sample_result, 1)
+        "🧪 BOT 4 — FILTER 2 RELAXED LIVE — PREVIEW, BUKAN SINYAL\n\n"
+        + format_filter2_alert({**sample_result, "filter2_relaxed": True}, 1)
     ),
 ]
 

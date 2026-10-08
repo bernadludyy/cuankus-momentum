@@ -3,16 +3,17 @@ from __future__ import annotations
 from datetime import datetime
 
 from scanner.market_hours import WIB
-from scanner.confluence import score_flow_pre, score_flow_final
 from scanner.foreign_score import build_foreign_metrics
 from scanner.daily_filters import compute_daily_filter_metrics
 from scanner.microstructure import (
     _gte as micro_gte,
     _trade_age_minutes,
     apply_micro_confirmation,
+    apply_relaxed_micro_confirmation,
+    relaxed_anti_falling_knife_pass,
 )
 from scanner.scoring import _gte as scoring_gte
-from main import should_run_flow_fallback
+from main import should_run_filter2_fallback
 
 
 def test_zero_is_not_missing() -> None:
@@ -99,47 +100,66 @@ def test_golden_pocket_from_recent_bullish_swing() -> None:
     assert metrics["golden_pocket_lookback_5d"] == 5
 
 
-def test_flow_confluence_scoring() -> None:
-    strong = {
-        "foreign_score": 90.0,
-        "activity_spike": 3.2,
-        "volume_spike": 6.5,
-        "position_in_range": 0.92,
-        "interval_return_pct": 0.80,
+def _relaxed_candidate() -> dict:
+    return {
+        "ticker": "RELAX",
+        "leakage_score": 50.0,
+        "momentum_score": 56.0,
+        "activity_spike": 1.50,
+        "interval_return_pct": 0.05,
+        "breakout_pct": -0.20,
+        "position_in_range": 0.65,
+        "volume_spike": 2.50,
+        "daily_change_pct": 0.50,
         "anti_falling_knife_pass": True,
         "not_overextended": True,
-        "micro_score": 82.0,
-        "aggressive_buy_ratio": 0.78,
-        "bid_percent": 67.0,
-    }
-    weak = {
-        "foreign_score": 35.0,
-        "activity_spike": 1.1,
-        "volume_spike": 1.2,
-        "position_in_range": 0.45,
-        "interval_return_pct": -0.10,
-        "anti_falling_knife_pass": True,
-        "not_overextended": True,
-        "micro_score": 45.0,
-        "aggressive_buy_ratio": 0.48,
-        "bid_percent": 48.0,
+        "reasons": [],
     }
 
-    assert score_flow_pre(strong) > score_flow_pre(weak)
-    score, status, reasons = score_flow_final(strong)
-    assert score >= 75.0
-    assert status in {"FLOW CONFLUENCE", "STRONG FLOW CONFLUENCE"}
-    assert reasons
 
-    weak_score, weak_status, _ = score_flow_final(weak)
-    assert weak_score < 75.0
-    assert weak_status != "FLOW CONFLUENCE"
+def _relaxed_micro() -> dict:
+    return {
+        "micro_score": 50.0,
+        "aggressive_buy_ratio": 0.58,
+        "bid_percent": 55.0,
+        "micro_reasons": [],
+    }
 
 
-def test_flow_screener_is_fallback_only() -> None:
-    assert should_run_flow_fallback(0)
-    assert not should_run_flow_fallback(1)
-    assert not should_run_flow_fallback(2)
+def test_filter2_relaxed_can_confirm_before_filter1() -> None:
+    candidate = _relaxed_candidate()
+    micro = _relaxed_micro()
+
+    strict = apply_micro_confirmation(candidate, micro)
+    relaxed = apply_relaxed_micro_confirmation(candidate, micro)
+
+    assert strict["phase"] == "NONE", strict
+    assert relaxed["phase"] == "PRE_MOMENTUM", relaxed
+    assert relaxed["anti_falling_knife_relaxed_pass"] is True
+
+
+def test_filter2_never_relaxes_falling_knife_gate() -> None:
+    candidate = _relaxed_candidate()
+    candidate["anti_falling_knife_pass"] = False
+    relaxed = apply_relaxed_micro_confirmation(candidate, _relaxed_micro())
+
+    assert not relaxed_anti_falling_knife_pass(candidate)
+    assert relaxed["phase"] == "NONE", relaxed
+
+
+def test_filter2_rejects_price_near_intraday_low() -> None:
+    candidate = _relaxed_candidate()
+    candidate["position_in_range"] = 0.20
+    relaxed = apply_relaxed_micro_confirmation(candidate, _relaxed_micro())
+
+    assert not relaxed_anti_falling_knife_pass(candidate)
+    assert relaxed["phase"] == "NONE", relaxed
+
+
+def test_filter2_is_fallback_only() -> None:
+    assert should_run_filter2_fallback(0)
+    assert not should_run_filter2_fallback(1)
+    assert not should_run_filter2_fallback(2)
 
 
 def test_foreign_value_basis() -> None:
@@ -162,7 +182,9 @@ if __name__ == "__main__":
     test_phase_hierarchy_prefers_pre_momentum_over_leakage()
     test_trade_age_parser()
     test_golden_pocket_from_recent_bullish_swing()
-    test_flow_confluence_scoring()
-    test_flow_screener_is_fallback_only()
+    test_filter2_relaxed_can_confirm_before_filter1()
+    test_filter2_never_relaxes_falling_knife_gate()
+    test_filter2_rejects_price_near_intraday_low()
+    test_filter2_is_fallback_only()
     test_foreign_value_basis()
     print("Regression tests passed.")

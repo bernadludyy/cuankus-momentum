@@ -26,6 +26,22 @@ from config import (
     MIN_ACTIVITY_SPIKE,
     RUNNING_TRADE_MIN_LOT,
     RUNNING_TRADE_MAX_AGE_MINUTES,
+    FILTER2_LEAKAGE_THRESHOLD,
+    FILTER2_MOMENTUM_THRESHOLD,
+    FILTER2_PRE_MOMENTUM_THRESHOLD,
+    FILTER2_MICRO_MIN_CONFIRM_SCORE,
+    FILTER2_PRE_MOMENTUM_MIN_MICRO_SCORE,
+    FILTER2_PRE_MOMENTUM_MIN_AGGRESSIVE_BUY,
+    FILTER2_PRE_MOMENTUM_MIN_INTERVAL_RETURN_PCT,
+    FILTER2_PRE_MOMENTUM_MIN_BREAKOUT_PCT,
+    FILTER2_PRE_MOMENTUM_MIN_POSITION_IN_RANGE,
+    FILTER2_MIN_BREAKOUT_PCT,
+    FILTER2_MOMENTUM_MIN_INTERVAL_RETURN_PCT,
+    FILTER2_IGNITION_THRESHOLD,
+    FILTER2_IGNITION_MIN_VOLUME_SPIKE,
+    FILTER2_IGNITION_MIN_MICRO_SCORE,
+    FILTER2_IGNITION_MIN_AGGRESSIVE_BUY,
+    FILTER2_MIN_POSITION_IN_RANGE,
 )
 from scanner.market_data import fetch_orderbook, fetch_running_trades
 from scanner.market_hours import WIB
@@ -357,6 +373,125 @@ def apply_micro_confirmation(result: dict[str, Any], micro: dict[str, Any]) -> d
             "momentum_score": round(momentum, 1),
             "ignition_score": round(ignition_score, 1),
             "micro_confirmed": micro_confirmed,
+            "reasons": reasons,
+        }
+    )
+    return output
+
+
+def relaxed_anti_falling_knife_pass(result: dict[str, Any]) -> bool:
+    """Hard safety gate for Filter 2.
+
+    Filter 2 may relax momentum/activity thresholds, but it must not relax the
+    existing falling-knife protection. Price near the intraday low is also
+    rejected when range position is available.
+    """
+    if not bool(result.get("anti_falling_knife_pass")):
+        return False
+    if not bool(result.get("not_overextended")):
+        return False
+
+    position = result.get("position_in_range")
+    if position is not None and float(position) < FILTER2_MIN_POSITION_IN_RANGE:
+        return False
+
+    return True
+
+
+def apply_relaxed_micro_confirmation(
+    result: dict[str, Any],
+    micro: dict[str, Any],
+) -> dict[str, Any]:
+    """Filter 2: same momentum family as Filter 1 with looser thresholds.
+
+    The scoring formulas are unchanged. Only confirmation thresholds are
+    relaxed. Anti-falling-knife remains a mandatory hard gate.
+    """
+    output = {**result, **micro}
+
+    micro_score = float(micro.get("micro_score") or 0.0)
+    adjustment = (micro_score - 50.0) * 0.25
+    leakage = max(0.0, min(100.0, float(result["leakage_score"]) + adjustment))
+    momentum = max(0.0, min(100.0, float(result["momentum_score"]) + adjustment))
+
+    reasons = list(result.get("reasons") or [])
+    reasons.extend(micro.get("micro_reasons") or [])
+    safe = relaxed_anti_falling_knife_pass(result)
+
+    ignition_score, ignition_reasons = score_ignition(result, micro)
+    volume_spike = result.get("volume_spike")
+    interval_return = result.get("interval_return_pct")
+    buy_ratio = micro.get("aggressive_buy_ratio")
+
+    phase = "NONE"
+    score = max(leakage, momentum, ignition_score)
+
+    if (
+        safe
+        and micro_score >= FILTER2_MICRO_MIN_CONFIRM_SCORE
+        and momentum >= FILTER2_MOMENTUM_THRESHOLD
+        and _gte(result.get("breakout_pct"), FILTER2_MIN_BREAKOUT_PCT)
+        and _gte(result.get("interval_return_pct"), FILTER2_MOMENTUM_MIN_INTERVAL_RETURN_PCT)
+    ):
+        phase = "POWERFUL_MOMENTUM"
+        score = momentum
+        reasons.append("Filter 2: momentum confirmation dengan threshold relaxed")
+    elif (
+        safe
+        and micro_score >= FILTER2_PRE_MOMENTUM_MIN_MICRO_SCORE
+        and momentum >= FILTER2_PRE_MOMENTUM_THRESHOLD
+        and (result.get("activity_spike") or 0) >= 1.20
+        and _gte(
+            result.get("interval_return_pct"),
+            FILTER2_PRE_MOMENTUM_MIN_INTERVAL_RETURN_PCT,
+        )
+        and _gte(
+            result.get("breakout_pct"),
+            FILTER2_PRE_MOMENTUM_MIN_BREAKOUT_PCT,
+        )
+        and (result.get("position_in_range") or 0)
+            >= FILTER2_PRE_MOMENTUM_MIN_POSITION_IN_RANGE
+        and (micro.get("aggressive_buy_ratio") or 0)
+            >= FILTER2_PRE_MOMENTUM_MIN_AGGRESSIVE_BUY
+    ):
+        phase = "PRE_MOMENTUM"
+        score = momentum
+        reasons.append("Filter 2: pre-momentum relaxed, buyer tetap terkonfirmasi")
+    elif (
+        safe
+        and micro_score >= FILTER2_MICRO_MIN_CONFIRM_SCORE
+        and leakage >= FILTER2_LEAKAGE_THRESHOLD
+    ):
+        phase = "EARLY_LEAKAGE"
+        score = leakage
+        reasons.append("Filter 2: leakage relaxed dengan anti-falling-knife aktif")
+    elif (
+        safe
+        and ignition_score >= FILTER2_IGNITION_THRESHOLD
+        and volume_spike is not None
+        and float(volume_spike) >= FILTER2_IGNITION_MIN_VOLUME_SPIKE
+        and micro_score >= FILTER2_IGNITION_MIN_MICRO_SCORE
+        and buy_ratio is not None
+        and float(buy_ratio) >= FILTER2_IGNITION_MIN_AGGRESSIVE_BUY
+        and interval_return is not None
+        and float(interval_return) >= IGNITION_MIN_INTERVAL_RETURN_PCT
+        and float(interval_return) <= IGNITION_MAX_INTERVAL_RETURN_PCT
+    ):
+        phase = "EARLY_IGNITION"
+        score = ignition_score
+        reasons.extend(ignition_reasons)
+        reasons.append("Filter 2: ignition relaxed, anti-falling-knife tetap lolos")
+
+    output.update(
+        {
+            "phase": phase,
+            "score": round(score, 1),
+            "leakage_score": round(leakage, 1),
+            "momentum_score": round(momentum, 1),
+            "ignition_score": round(ignition_score, 1),
+            "micro_confirmed": micro_score >= FILTER2_MICRO_MIN_CONFIRM_SCORE,
+            "filter2_relaxed": True,
+            "anti_falling_knife_relaxed_pass": safe,
             "reasons": reasons,
         }
     )
