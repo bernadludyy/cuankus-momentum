@@ -104,6 +104,9 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_CHAT_ID: ${{ secrets.TELEGRAM_GROUP_CHAT_ID }}
+          PTSN_STRUCTURE_ENABLED: "true"
+          PTSN_STRUCTURE_COOLDOWN_MINUTES: "90"
+          PTSN_STRUCTURE_MAX_ALERTS_PER_CYCLE: "3"
 
           ZPI_QUOTE_PATH: quote
           ZPI_SUMMARY_PATH: summary
