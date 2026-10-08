@@ -21,8 +21,13 @@ def _send_to_chat(message: str, chat_id: str) -> dict:
     return response.json()
 
 
-def get_telegram_targets() -> list[str]:
+def get_telegram_targets(target: str = "all") -> list[str]:
+    """Route explicitly: structural PTSN alerts must never reach the group."""
+    if target not in {"all", "private"}:
+        raise ValueError(f"Unknown Telegram target: {target}")
     targets = [TELEGRAM_CHAT_ID]
+    if target == "private":
+        return [chat_id for chat_id in targets if chat_id]
 
     if (
         TELEGRAM_GROUP_CHAT_ID
@@ -33,14 +38,14 @@ def get_telegram_targets() -> list[str]:
     return [chat_id for chat_id in targets if chat_id]
 
 
-def send_telegram(message: str) -> dict:
-    """Kirim alert ke private chat dan, jika diset, ke grup Telegram."""
+def send_telegram(message: str, target: str = "all") -> dict:
+    """Send to both destinations by default, or only to the private chat."""
     validate_telegram_config()
 
     results = []
     errors = []
 
-    for chat_id in get_telegram_targets():
+    for chat_id in get_telegram_targets(target=target):
         try:
             result = _send_to_chat(message, chat_id)
             results.append(
