@@ -307,40 +307,10 @@ def apply_micro_confirmation(result: dict[str, Any], micro: dict[str, Any]) -> d
     ignition_buy_ratio = micro.get("aggressive_buy_ratio")
     micro_confirmed = micro_score >= MICRO_MIN_CONFIRM_SCORE
 
-    if (
-        micro_confirmed
-        and momentum >= MOMENTUM_THRESHOLD
-        and _gte(result.get("breakout_pct"), MIN_BREAKOUT_PCT)
-        and _gte(result.get("interval_return_pct"), MIN_MOMENTUM_INTERVAL_RETURN_PCT)
-        and result.get("anti_falling_knife_pass")
-        and result.get("not_overextended")
-    ):
-        phase = "POWERFUL_MOMENTUM"
-        score = momentum
-    elif (
-        micro_score >= PRE_MOMENTUM_MIN_MICRO_SCORE
-        and momentum >= PRE_MOMENTUM_THRESHOLD
-        and (result.get("activity_spike") or 0) >= MIN_ACTIVITY_SPIKE
-        and _gte(result.get("interval_return_pct"), PRE_MOMENTUM_MIN_INTERVAL_RETURN_PCT)
-        and _gte(result.get("breakout_pct"), PRE_MOMENTUM_MIN_BREAKOUT_PCT)
-        and (result.get("position_in_range") or 0)
-            >= PRE_MOMENTUM_MIN_POSITION_IN_RANGE
-        and (micro.get("aggressive_buy_ratio") or 0)
-            >= PRE_MOMENTUM_MIN_AGGRESSIVE_BUY
-        and result.get("anti_falling_knife_pass")
-        and result.get("not_overextended")
-    ):
-        phase = "PRE_MOMENTUM"
-        score = momentum
-        reasons.append("Momentum mulai terbentuk, belum full confirmation")
-    elif (
-        micro_confirmed
-        and leakage >= LEAKAGE_THRESHOLD
-        and result.get("anti_falling_knife_pass")
-    ):
-        phase = "EARLY_LEAKAGE"
-        score = leakage
-    elif (
+    # Determine each stage independently. The first matched stage is the
+    # earliest *genuine* condition, not an artificial downgrade of a strong
+    # signal. Existing thresholds and anti-falling-knife guards are unchanged.
+    ignition_ok = (
         ignition_score >= IGNITION_THRESHOLD
         and ignition_volume is not None
         and float(ignition_volume) >= IGNITION_MIN_VOLUME_SPIKE
@@ -349,21 +319,57 @@ def apply_micro_confirmation(result: dict[str, Any], micro: dict[str, Any]) -> d
         and float(ignition_buy_ratio) >= IGNITION_MIN_AGGRESSIVE_BUY
         and ignition_interval is not None
         and IGNITION_MIN_INTERVAL_RETURN_PCT
-            <= float(ignition_interval)
-            <= IGNITION_MAX_INTERVAL_RETURN_PCT
-        and (
-            ignition_daily is None
-            or float(ignition_daily) <= IGNITION_MAX_DAILY_CHANGE_PCT
-        )
+            <= float(ignition_interval) <= IGNITION_MAX_INTERVAL_RETURN_PCT
+        and (ignition_daily is None or float(ignition_daily) <= IGNITION_MAX_DAILY_CHANGE_PCT)
         and result.get("anti_falling_knife_pass")
         and result.get("not_overextended")
-    ):
-        phase = "EARLY_IGNITION"
-        score = ignition_score
+    )
+    pre_ok = (
+        micro_score >= PRE_MOMENTUM_MIN_MICRO_SCORE
+        and momentum >= PRE_MOMENTUM_THRESHOLD
+        and (result.get("activity_spike") or 0) >= MIN_ACTIVITY_SPIKE
+        and _gte(result.get("interval_return_pct"), PRE_MOMENTUM_MIN_INTERVAL_RETURN_PCT)
+        and _gte(result.get("breakout_pct"), PRE_MOMENTUM_MIN_BREAKOUT_PCT)
+        and (result.get("position_in_range") or 0) >= PRE_MOMENTUM_MIN_POSITION_IN_RANGE
+        and (micro.get("aggressive_buy_ratio") or 0) >= PRE_MOMENTUM_MIN_AGGRESSIVE_BUY
+        and result.get("anti_falling_knife_pass")
+        and result.get("not_overextended")
+    )
+    powerful_ok = (
+        micro_confirmed
+        and momentum >= MOMENTUM_THRESHOLD
+        and _gte(result.get("breakout_pct"), MIN_BREAKOUT_PCT)
+        and _gte(result.get("interval_return_pct"), MIN_MOMENTUM_INTERVAL_RETURN_PCT)
+        and result.get("anti_falling_knife_pass")
+        and result.get("not_overextended")
+    )
+    leakage_context = (
+        micro_confirmed and leakage >= LEAKAGE_THRESHOLD
+        and result.get("anti_falling_knife_pass")
+    )
+    phase_scores = {
+        "EARLY_IGNITION": ignition_score,
+        "PRE_MOMENTUM": momentum,
+        "POWERFUL_MOMENTUM": momentum,
+    }
+    eligible_phases = [
+        stage for stage, qualifies in (
+            ("EARLY_IGNITION", ignition_ok),
+            ("PRE_MOMENTUM", pre_ok),
+            ("POWERFUL_MOMENTUM", powerful_ok),
+        ) if qualifies
+    ]
+    phase = eligible_phases[0] if eligible_phases else "NONE"
+    score = phase_scores[phase] if phase != "NONE" else max(leakage, momentum, ignition_score)
+    if phase == "EARLY_IGNITION":
         reasons.extend(ignition_reasons)
         reasons.append("Aktivitas menyala sebelum momentum penuh")
-    else:
-        score = max(leakage, momentum, ignition_score)
+    elif phase == "PRE_MOMENTUM":
+        reasons.append("Momentum mulai terbentuk, belum full confirmation")
+    elif phase == "POWERFUL_MOMENTUM":
+        reasons.append("Breakout dan momentum sudah terkonfirmasi")
+    elif leakage_context:
+        reasons.append("Early Leakage: konteks pendukung, bukan tahap alert Telegram")
 
     output.update(
         {
@@ -373,6 +379,9 @@ def apply_micro_confirmation(result: dict[str, Any], micro: dict[str, Any]) -> d
             "momentum_score": round(momentum, 1),
             "ignition_score": round(ignition_score, 1),
             "micro_confirmed": micro_confirmed,
+            "eligible_phases": eligible_phases,
+            "phase_scores": {key: round(val, 1) for key, val in phase_scores.items()},
+            "leakage_context": bool(leakage_context),
             "reasons": reasons,
         }
     )
