@@ -620,16 +620,21 @@ def format_alert(result: dict) -> str:
         else ""
     )
 
+    score_header = (
+        "📊 FILTER 2 — RELAXED MOMENTUM SCORE\n"
+        if result.get("filter2_relaxed")
+        else "📊 FILTER 1 — MOMENTUM SCORE\n"
+    )
+
     return (
         f"{icon} {title}\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"📌 {result['ticker']} | Price: {format_price(result.get('price'))}\n\n"
-        "📊 SCREENER 1 — MOMENTUM SCORE\n"
+        f"{score_header}"
         f"Score: {result['score']}/100\n"
         f"Leakage: {result['leakage_score']}/100\n"
         f"Momentum: {result['momentum_score']}/100\n"
-        f"Ignition: {format_num(result.get('ignition_score'), '/100')}\n"
-        f"Flow Score: {format_num(result.get('flow_score'), '/100')}\n\n"
+        f"Ignition: {format_num(result.get('ignition_score'), '/100')}\n\n"
         "🌍 FUNDAMENTAL & FLOW\n"
         f"Market Cap: {format_market_cap(result.get('market_cap'))}\n"
         f"Foreign Score: {format_num(result.get('foreign_score'), '/100')}\n"
@@ -1021,10 +1026,6 @@ def run_once() -> None:
             continue
 
         result = apply_micro_confirmation(result, micro)
-        flow_score, flow_status, flow_reasons = score_flow_final(result)
-        result["flow_score"] = flow_score
-        result["flow_status"] = flow_status
-        result["flow_reasons"] = flow_reasons
         processed_primary.append(result)
         primary_processed_by_ticker[ticker] = result
 
