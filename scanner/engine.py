@@ -41,13 +41,62 @@ def analyze_ticker(ticker: str) -> dict[str, Any] | None:
     return {**features, **signal}
 
 
+PRIMARY_STAGES = ("EARLY_IGNITION", "PRE_MOMENTUM", "POWERFUL_MOMENTUM")
+
+
 def _phase_rank(phase: str | None) -> int:
-    return {
-        "EARLY_IGNITION": 1,
-        "EARLY_LEAKAGE": 2,
-        "PRE_MOMENTUM": 3,
-        "POWERFUL_MOMENTUM": 4,
-    }.get(phase or "", 0)
+    return {name: i + 1 for i, name in enumerate(PRIMARY_STAGES)}.get(phase or "", 0)
+
+
+def select_next_primary_phase(
+    result: dict[str, Any], state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Select the earliest eligible stage, then advance at most one stage.
+
+    Never mislabel an already extended move as ignition: the eligibility
+    checks come from the real stage thresholds. Existing anchors survive.
+    """
+    output = dict(result)
+    eligible = [p for p in PRIMARY_STAGES if p in (result.get("eligible_phases") or [])]
+    if not eligible:
+        return output
+
+    if state is None:
+        state = get_signal_state(str(result["ticker"]))
+    anchor = (state or {}).get("anchor_phase")
+    none_since = (state or {}).get("none_since")
+    if none_since:
+        try:
+            gap_start = datetime.fromisoformat(none_since)
+            if (datetime.now(gap_start.tzinfo) - gap_start).total_seconds() / 60 >= SIGNAL_REARM_MINUTES:
+                anchor = None
+        except (ValueError, TypeError):
+            pass
+
+    if anchor in PRIMARY_STAGES:
+        index = PRIMARY_STAGES.index(anchor)
+        next_stage = PRIMARY_STAGES[index + 1] if index + 1 < len(PRIMARY_STAGES) else None
+        if next_stage in eligible:
+            phase = next_stage
+        else:
+            # No phase skipping after an anchor is set. A stronger phase may
+            # be pending confirmation of the intermediate stage on a later scan.
+            previous_or_lower = [p for p in eligible if _phase_rank(p) <= _phase_rank(anchor)]
+            phase = previous_or_lower[-1] if previous_or_lower else "NONE"
+    else:
+        # First-ever detection: alert the earliest stage actually qualified.
+        # Do not fabricate prior stages if scanner missed their entry window.
+        phase = eligible[0]
+
+    output["phase"] = phase
+    output["pending_stage"] = phase == "NONE" and bool(eligible)
+    if phase in PRIMARY_STAGES:
+        output["score"] = round(float(result["phase_scores"][phase]), 1)
+    if output["pending_stage"]:
+        output["reasons"] = list(output.get("reasons") or []) + [
+            "Menunggu konfirmasi tahapan momentum berikutnya"
+        ]
+    return output
 
 
 def should_alert(result: dict[str, Any]) -> bool:
@@ -60,12 +109,7 @@ def should_alert(result: dict[str, Any]) -> bool:
     phase = result.get("phase")
     ticker = result.get("ticker")
 
-    if phase not in {
-        "EARLY_IGNITION",
-        "PRE_MOMENTUM",
-        "EARLY_LEAKAGE",
-        "POWERFUL_MOMENTUM",
-    }:
+    if phase not in PRIMARY_STAGES:
         return False
 
     state = get_signal_state(ticker)

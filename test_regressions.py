@@ -14,6 +14,7 @@ from scanner.microstructure import (
 )
 from scanner.scoring import _gte as scoring_gte
 from main import should_run_filter2_fallback
+from scanner.engine import select_next_primary_phase
 
 
 def test_zero_is_not_missing() -> None:
@@ -177,9 +178,73 @@ def test_foreign_value_basis() -> None:
     assert round(metrics["net_foreign_ratio_pct"], 2) == 15.00
 
 
+
+
+def _multi_stage_candidate() -> tuple[dict, dict]:
+    # Qualified for all three stages simultaneously. The earliest should win.
+    return (
+        {
+            "ticker": "STAGED", "leakage_score": 90.0,
+            "momentum_score": 96.0, "activity_spike": 4.0,
+            "interval_return_pct": 0.70, "breakout_pct": 1.10,
+            "position_in_range": 0.95, "volume_spike": 6.0,
+            "daily_change_pct": 2.0, "anti_falling_knife_pass": True,
+            "not_overextended": True, "reasons": [],
+        },
+        {
+            "micro_score": 90.0, "aggressive_buy_ratio": 0.80,
+            "bid_percent": 62.0, "micro_reasons": [],
+        },
+    )
+
+
+def test_filter1_staged_alert_order() -> None:
+    candidate, micro = _multi_stage_candidate()
+    result = apply_micro_confirmation(candidate, micro)
+    assert result["eligible_phases"] == [
+        "EARLY_IGNITION", "PRE_MOMENTUM", "POWERFUL_MOMENTUM"
+    ]
+    assert result["phase"] == "EARLY_IGNITION", result
+    first = select_next_primary_phase(result, state={})
+    assert first["phase"] == "EARLY_IGNITION", first
+    second = select_next_primary_phase(result, state={"anchor_phase": "EARLY_IGNITION"})
+    assert second["phase"] == "PRE_MOMENTUM", second
+    third = select_next_primary_phase(result, state={"anchor_phase": "PRE_MOMENTUM"})
+    assert third["phase"] == "POWERFUL_MOMENTUM", third
+    done = select_next_primary_phase(result, state={"anchor_phase": "POWERFUL_MOMENTUM"})
+    assert done["phase"] == "POWERFUL_MOMENTUM", done
+
+
+def test_filter1_never_skips_intermediate_stage_or_fakes_ignition() -> None:
+    candidate, micro = _multi_stage_candidate()
+    candidate["daily_change_pct"] = 6.0  # Ignition window already missed.
+    result = apply_micro_confirmation(candidate, micro)
+    assert "EARLY_IGNITION" not in result["eligible_phases"]
+    assert select_next_primary_phase(result, state={})["phase"] == "PRE_MOMENTUM"
+    # After a genuine ignition, the next stage must be Pre, not Powerful.
+    only_powerful = dict(result)
+    only_powerful["eligible_phases"] = ["POWERFUL_MOMENTUM"]
+    pending = select_next_primary_phase(only_powerful, state={"anchor_phase": "EARLY_IGNITION"})
+    assert pending["phase"] == "NONE" and pending["pending_stage"]
+
+
+def test_filter1_leakage_is_context_not_a_separate_telegram_stage() -> None:
+    candidate, micro = _multi_stage_candidate()
+    candidate.update({
+        "momentum_score": 10.0, "interval_return_pct": -0.1,
+        "volume_spike": 1.0, "activity_spike": 1.0,
+        "breakout_pct": -0.5,
+    })
+    result = apply_micro_confirmation(candidate, micro)
+    assert result["leakage_context"]
+    assert result["phase"] == "NONE", result
+
 if __name__ == "__main__":
     test_zero_is_not_missing()
     test_phase_hierarchy_prefers_pre_momentum_over_leakage()
+    test_filter1_staged_alert_order()
+    test_filter1_never_skips_intermediate_stage_or_fakes_ignition()
+    test_filter1_leakage_is_context_not_a_separate_telegram_stage()
     test_trade_age_parser()
     test_golden_pocket_from_recent_bullish_swing()
     test_filter2_relaxed_can_confirm_before_filter1()
