@@ -17,6 +17,11 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID", "").strip()
 
+# Independent private-only PTSN-pattern momentum. Shares the existing scanner/cache.
+PTSN_STRUCTURE_ENABLED = os.getenv("PTSN_STRUCTURE_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
+PTSN_STRUCTURE_COOLDOWN_MINUTES = int(os.getenv("PTSN_STRUCTURE_COOLDOWN_MINUTES", "90"))
+PTSN_STRUCTURE_MAX_ALERTS_PER_CYCLE = int(os.getenv("PTSN_STRUCTURE_MAX_ALERTS_PER_CYCLE", "3"))
+
 USE_MULTI_QUOTE = os.getenv("USE_MULTI_QUOTE", "true").lower() in {"1", "true", "yes", "y"}
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "20"))
 TOP_MOVER_COUNT = int(os.getenv("TOP_MOVER_COUNT", "50"))
