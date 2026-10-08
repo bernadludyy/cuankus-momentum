@@ -297,12 +297,14 @@ def test_ptsn_private_routing_never_reaches_group() -> None:
     original_chat = notifier.TELEGRAM_CHAT_ID
     original_group = notifier.TELEGRAM_GROUP_CHAT_ID
     original_token = notifier.TELEGRAM_BOT_TOKEN
+    original_validate = notifier.validate_telegram_config
     try:
         recipients = []
         notifier._send_to_chat = lambda message, chat_id: (recipients.append(chat_id) or {"ok": True})
         notifier.TELEGRAM_CHAT_ID = "user-private-test"
         notifier.TELEGRAM_GROUP_CHAT_ID = "group-test"
         notifier.TELEGRAM_BOT_TOKEN = "fake-test-token"
+        notifier.validate_telegram_config = lambda: None  # Isolate routing from secrets
         result = notifier.send_telegram("PTSN private", target="private")
         assert result["ok"] and recipients == ["user-private-test"], recipients
         recipients.clear()
@@ -319,6 +321,7 @@ def test_ptsn_private_routing_never_reaches_group() -> None:
         notifier.TELEGRAM_CHAT_ID = original_chat
         notifier.TELEGRAM_GROUP_CHAT_ID = original_group
         notifier.TELEGRAM_BOT_TOKEN = original_token
+        notifier.validate_telegram_config = original_validate
 
 
 def test_ptsn_added_to_static_watchlist() -> None:
