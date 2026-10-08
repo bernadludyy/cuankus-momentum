@@ -38,6 +38,8 @@ Default Filter 2 settings:
 - daily VolMA10/MA100: >=1.20x vs Filter 1 >=2.00x
 - leakage confirmation: >=60 vs Filter 1 >=70
 - momentum confirmation: >=70 vs Filter 1 >=80
+- powerful-momentum breakout: >=0.00% vs Filter 1 >=0.30%
+- powerful-momentum interval return: >=0.15% vs Filter 1 >=0.35%
 - pre-momentum confirmation: >=55 vs Filter 1 >=65
 - micro confirmation: >=40 vs Filter 1 >=45
 - pre-momentum micro: >=45 vs Filter 1 >=55
