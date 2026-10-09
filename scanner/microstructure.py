@@ -171,20 +171,55 @@ def analyze_running_trades(payload: Any, max_age_minutes: int = RUNNING_TRADE_MA
         ages.append(max(age, 0.0))
 
     buy_lots = sell_lots = big_buy_lots = big_sell_lots = 0.0
+    aggressive_buy_value = aggressive_sell_value = 0.0
+    priced_trade_count = 0
+
     for item in fresh_items:
-        lots = _num(item.get("lots")) or 0.0
+        lots = _num(item.get("lots"))
+        if lots is None:
+            lots = _num(item.get("lot"))
+        lots = lots or 0.0
+
+        direct_value = None
+        for key in ("tradeValue", "transactionValue", "value", "Value"):
+            direct_value = _num(item.get(key))
+            if direct_value is not None and direct_value >= 0:
+                break
+
+        trade_value = direct_value
+        if trade_value is None:
+            trade_price = None
+            for key in ("price", "Price", "tradePrice", "last", "Last"):
+                trade_price = _num(item.get(key))
+                if trade_price is not None and trade_price > 0:
+                    break
+            if trade_price is not None and lots > 0:
+                trade_value = trade_price * lots * max(1, TRADEFLOW_LOT_SIZE)
+
+        if trade_value is not None:
+            priced_trade_count += 1
+
         action = str(item.get("action") or "").upper()
         if action == "BUY":
             buy_lots += lots
+            if trade_value is not None:
+                aggressive_buy_value += trade_value
             if lots >= BIG_PRINT_MIN_LOT:
                 big_buy_lots += lots
         elif action == "SELL":
             sell_lots += lots
+            if trade_value is not None:
+                aggressive_sell_value += trade_value
             if lots >= BIG_PRINT_MIN_LOT:
                 big_sell_lots += lots
 
     total_lots = buy_lots + sell_lots
     big_total = big_buy_lots + big_sell_lots
+    net_aggression_value = (
+        aggressive_buy_value - aggressive_sell_value
+        if priced_trade_count > 0
+        else None
+    )
     return {
         "trade_count": len(fresh_items),
         "raw_trade_count": len(items),
@@ -195,6 +230,10 @@ def analyze_running_trades(payload: Any, max_age_minutes: int = RUNNING_TRADE_MA
         "sell_lots": sell_lots,
         "net_aggressive_lots": buy_lots - sell_lots,
         "aggressive_buy_ratio": buy_lots / total_lots if total_lots > 0 else None,
+        "aggressive_buy_value": aggressive_buy_value if priced_trade_count > 0 else None,
+        "aggressive_sell_value": aggressive_sell_value if priced_trade_count > 0 else None,
+        "net_aggression_value": net_aggression_value,
+        "aggression_priced_trade_count": priced_trade_count,
         "big_buy_lots": big_buy_lots,
         "big_sell_lots": big_sell_lots,
         "big_buy_ratio": big_buy_lots / big_total if big_total > 0 else None,
