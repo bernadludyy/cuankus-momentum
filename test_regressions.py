@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from scanner.market_hours import WIB
+from project_fabric.data_gateway import market_policy
+from scanner.market_data import discover_active_tickers, get_stock_summary_row
 from scanner.ptsn_structure import build_ptsn_structure, format_ptsn_structure
 from bot import notifier
 from main import load_universe
@@ -164,6 +166,25 @@ def test_filter2_is_fallback_only() -> None:
     assert should_run_filter2_fallback(0)
     assert not should_run_filter2_fallback(1)
     assert not should_run_filter2_fallback(2)
+
+
+
+def test_shared_market_collector_snapshot() -> None:
+    policy = market_policy("idx", "stock-summary")
+    assert policy.ttl_seconds == 300
+    assert policy.stale_if_error_seconds == 900
+
+    payload = {
+        "data": [
+            {"StockCode": "AAAA", "Frequency": 100, "Value": 10, "Volume": 10},
+            {"StockCode": "BBBB", "Frequency": 10, "Value": 100, "Volume": 20},
+            {"StockCode": "CCCC", "Frequency": 20, "Value": 20, "Volume": 100},
+        ]
+    }
+    tickers = discover_active_tickers(1, payload=payload)
+
+    assert set(tickers) == {"AAAA", "BBBB", "CCCC"}
+    assert get_stock_summary_row("AAAA")["Frequency"] == 100
 
 
 def test_foreign_value_basis() -> None:
@@ -345,5 +366,6 @@ if __name__ == "__main__":
     test_filter2_never_relaxes_falling_knife_gate()
     test_filter2_rejects_price_near_intraday_low()
     test_filter2_is_fallback_only()
+    test_shared_market_collector_snapshot()
     test_foreign_value_basis()
     print("Regression tests passed.")
