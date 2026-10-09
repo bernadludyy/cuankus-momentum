@@ -108,6 +108,29 @@ def init_db() -> None:
 
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS tradeflow_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            price REAL,
+            aggressive_buy_value REAL,
+            aggressive_sell_value REAL,
+            net_aggression_value REAL,
+            aggressive_buy_ratio REAL,
+            micro_score REAL
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_tradeflow_snapshots_ticker_ts
+        ON tradeflow_snapshots(ticker, ts)
+        """
+    )
+
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS market_cap_cache (
             ticker TEXT PRIMARY KEY,
             market_cap REAL NOT NULL,
@@ -253,6 +276,64 @@ def get_recent_snapshots(ticker: str, limit: int = 12) -> list[dict[str, Any]]:
         LIMIT ?
         """,
         (ticker.upper(), limit),
+    ).fetchall()
+    con.close()
+
+    data = [dict(row) for row in rows]
+    data.reverse()
+    return data
+
+
+def save_tradeflow_snapshot(
+    ticker: str,
+    micro: dict[str, Any],
+    price: float | None = None,
+    ts: str | None = None,
+) -> None:
+    if not ticker:
+        return
+
+    con = connect()
+    con.execute(
+        """
+        INSERT INTO tradeflow_snapshots (
+            ticker, ts, price,
+            aggressive_buy_value, aggressive_sell_value,
+            net_aggression_value, aggressive_buy_ratio, micro_score
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ticker.upper(),
+            ts or now_wib_iso(),
+            price,
+            micro.get("aggressive_buy_value"),
+            micro.get("aggressive_sell_value"),
+            micro.get("net_aggression_value"),
+            micro.get("aggressive_buy_ratio"),
+            micro.get("micro_score"),
+        ),
+    )
+    con.commit()
+    con.close()
+
+
+def get_recent_tradeflow_snapshots(
+    ticker: str,
+    limit: int = 4,
+) -> list[dict[str, Any]]:
+    today = datetime.now(WIB).date().isoformat()
+    con = connect()
+    rows = con.execute(
+        """
+        SELECT *
+        FROM tradeflow_snapshots
+        WHERE ticker = ?
+          AND substr(ts, 1, 10) = ?
+        ORDER BY ts DESC
+        LIMIT ?
+        """,
+        (ticker.upper(), today, max(1, int(limit))),
     ).fetchall()
     con.close()
 

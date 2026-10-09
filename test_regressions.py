@@ -13,12 +13,14 @@ from scanner.daily_filters import compute_daily_filter_metrics
 from scanner.microstructure import (
     _gte as micro_gte,
     _trade_age_minutes,
+    analyze_running_trades,
     apply_micro_confirmation,
     apply_relaxed_micro_confirmation,
     relaxed_anti_falling_knife_pass,
 )
 from scanner.scoring import _gte as scoring_gte
-from main import should_run_filter2_fallback
+from main import should_run_filter2_fallback, format_alert
+from scanner.tradeflow import classify_aggression_trend
 from scanner.engine import select_next_primary_phase
 
 
@@ -58,6 +60,66 @@ def test_trade_age_parser() -> None:
     now = datetime(2026, 10, 1, 10, 0, 0, tzinfo=WIB)
     assert _trade_age_minutes("09:55:00", now=now) == 5.0
     assert _trade_age_minutes("bad-time", now=now) is None
+
+
+def test_tradeflow_aggressive_values_and_trend() -> None:
+    now_text = datetime.now(WIB).strftime("%H:%M:%S")
+    micro = analyze_running_trades(
+        {
+            "items": [
+                {"time": now_text, "action": "BUY", "lots": 100, "price": 200},
+                {"time": now_text, "action": "BUY", "lots": 50, "price": 210},
+                {"time": now_text, "action": "SELL", "lots": 80, "price": 205},
+            ]
+        }
+    )
+    assert micro["aggressive_buy_value"] == 3_050_000, micro
+    assert micro["aggressive_sell_value"] == 1_640_000, micro
+    assert micro["net_aggression_value"] == 1_410_000, micro
+
+    rising = classify_aggression_trend(
+        [
+            {"net_aggression_value": 100},
+            {"net_aggression_value": 130},
+            {"net_aggression_value": 170},
+            {"net_aggression_value": 220},
+        ],
+        min_samples=3,
+        flat_tolerance_pct=5,
+    )
+    assert rising["aggression_trend"] == "RISING", rising
+
+    falling = classify_aggression_trend(
+        [
+            {"net_aggression_value": 220},
+            {"net_aggression_value": 170},
+            {"net_aggression_value": 130},
+            {"net_aggression_value": 90},
+        ],
+        min_samples=3,
+        flat_tolerance_pct=5,
+    )
+    assert falling["aggression_trend"] == "FALLING", falling
+
+
+def test_tradeflow_not_in_telegram_yet() -> None:
+    text = format_alert(
+        {
+            "phase": "PRE_MOMENTUM",
+            "ticker": "TEST",
+            "price": 100,
+            "score": 70,
+            "leakage_score": 60,
+            "momentum_score": 70,
+            "aggressive_buy_value": 2_000_000_000,
+            "aggressive_sell_value": 500_000_000,
+            "net_aggression_value": 1_500_000_000,
+            "aggression_trend": "RISING",
+        }
+    )
+    assert "Net Aggression" not in text
+    assert "Aggression Trend" not in text
+    assert "Aggressive Buy Value" not in text
 
 
 def test_golden_pocket_from_recent_bullish_swing() -> None:
@@ -361,6 +423,8 @@ if __name__ == "__main__":
     test_filter1_never_skips_intermediate_stage_or_fakes_ignition()
     test_filter1_leakage_is_context_not_a_separate_telegram_stage()
     test_trade_age_parser()
+    test_tradeflow_aggressive_values_and_trend()
+    test_tradeflow_not_in_telegram_yet()
     test_golden_pocket_from_recent_bullish_swing()
     test_filter2_relaxed_can_confirm_before_filter1()
     test_filter2_never_relaxes_falling_knife_gate()
