@@ -105,6 +105,21 @@ IGNITION_MAX_DAILY_CHANGE_PCT = float(os.getenv("IGNITION_MAX_DAILY_CHANGE_PCT",
 RUNNING_TRADE_MIN_LOT = int(os.getenv("RUNNING_TRADE_MIN_LOT", "100"))
 RUNNING_TRADE_MAX_AGE_MINUTES = int(os.getenv("RUNNING_TRADE_MAX_AGE_MINUTES", "15"))
 BIG_PRINT_MIN_LOT = int(os.getenv("BIG_PRINT_MIN_LOT", "500"))
+
+# Internal Tradeflow Confirmation Layer. This is observational only for now:
+# it does not change Filter 1/2 eligibility and is not rendered to Telegram.
+TRADEFLOW_INTERNAL_ENABLED = os.getenv(
+    "TRADEFLOW_INTERNAL_ENABLED", "true"
+).lower() in {"1", "true", "yes", "y"}
+TRADEFLOW_LOT_SIZE = int(os.getenv("TRADEFLOW_LOT_SIZE", "100"))
+TRADEFLOW_TREND_SNAPSHOTS = int(os.getenv("TRADEFLOW_TREND_SNAPSHOTS", "4"))
+TRADEFLOW_TREND_MIN_SNAPSHOTS = int(
+    os.getenv("TRADEFLOW_TREND_MIN_SNAPSHOTS", "3")
+)
+TRADEFLOW_TREND_FLAT_TOLERANCE_PCT = float(
+    os.getenv("TRADEFLOW_TREND_FLAT_TOLERANCE_PCT", "8.0")
+)
+
 RECENT_SNAPSHOTS = int(os.getenv("RECENT_SNAPSHOTS", "12"))
 MIN_BASELINE_INTERVALS = int(os.getenv("MIN_BASELINE_INTERVALS", "4"))
 
