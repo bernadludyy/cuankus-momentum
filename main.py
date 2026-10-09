@@ -1122,6 +1122,9 @@ def run_once() -> None:
     # Stage 2 — relaxed clone of Filter 1. It runs only when Filter 1 has no
     # final valid ticker. Every next cycle starts from Filter 1 again.
     processed_filter2_fallback: list[dict] = []
+    # Always initialize this cache because the private PTSN-style watcher below
+    # can read it even when Filter 2 is skipped after Filter 1 finds a signal.
+    fallback_micro_results: dict[str, dict] = {}
 
     if should_run_filter2_fallback(len(eligible_candidates)):
         print("[FILTER2-FALLBACK] Filter 1 returned 0 valid candidates; starting relaxed momentum.")
@@ -1161,7 +1164,6 @@ def run_once() -> None:
                 f"interval={format_num(result.get('interval_return_pct'), '%')}"
             )
 
-        fallback_micro_results: dict[str, dict] = {}
         if filter2_new_selected:
             worker_count = min(2, len(filter2_new_selected))
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
