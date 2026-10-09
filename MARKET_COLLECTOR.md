@@ -46,3 +46,51 @@ After V1 is stable, common endpoints can be standardized one by one:
 - broker-summary with ticker/date keyed cache and an appropriate TTL.
 
 Orderbook and running-trades should remain candidate-only live calls.
+
+
+## Phase 2 — shared history, foreign flow, and broker cache
+
+Phase 2 extends the cache-first contract without adding another scheduled job.
+
+### Stock history
+
+- Canonical shared request length: 120 sessions per ticker.
+- Fresh TTL: 6 hours.
+- Stale-on-error: 24 hours.
+- Bot 4 already requests 120 sessions.
+- Bot 1 also requests 120 upstream, then trims the cached payload locally for
+  1D/5D/10D/20D command output.
+- Result: one ticker/history cache key can serve both Bot 4 and Bot 1.
+
+### Foreign flow
+
+- Current/latest request TTL: 5 minutes.
+- Historical dated request TTL: 6 hours.
+- Historical stale-on-error: 24 hours.
+- First-page leaderboard requests use a canonical length of 50 so different
+  Telegram display limits reuse the same cache key.
+
+### Broker summary
+
+- Current-session broker-summary TTL: 5 minutes.
+- Historical completed-session TTL: 6 hours.
+- Historical stale-on-error: 24 hours.
+- Cache key remains ticker + startDate + endDate + net flag, so different
+  securities and periods cannot collide.
+
+### Historical stock-summary
+
+Dated stock-summary requests now use the 6-hour historical policy. This is
+especially useful for Bot 1 multi-day foreign aggregation, which should not
+re-fetch completed trading days every few minutes.
+
+### Remains live
+
+The following confirmation endpoints are deliberately not cached:
+- quote;
+- summary/multi-quote;
+- orderbook;
+- running-trades.
+
+This keeps Bot 4 microstructure confirmation live while moving reusable
+historical/common data into Neon.

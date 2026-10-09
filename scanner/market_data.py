@@ -42,7 +42,7 @@ def _request_json(
         headers=_headers(),
         params=params or {},
         timeout=timeout,
-        policy=market_policy(family, endpoint),
+        policy=market_policy(family, endpoint, params or {}),
     )
 
 
