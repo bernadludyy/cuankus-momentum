@@ -47,6 +47,10 @@ from config import (
     MIN_VALUE_MA_IDR,
     TOP_MOVER_COUNT,
     USE_MULTI_QUOTE,
+    TRADEFLOW_INTERNAL_ENABLED,
+    TRADEFLOW_TREND_SNAPSHOTS,
+    TRADEFLOW_TREND_MIN_SNAPSHOTS,
+    TRADEFLOW_TREND_FLAT_TOLERANCE_PCT,
 )
 from scanner.daily_filters import (
     compute_daily_filter_metrics,
@@ -73,6 +77,7 @@ from scanner.market_data import (
 )
 from scanner.market_hours import is_idx_market_window
 from scanner.shareholder_filter import fetch_latest_shareholder_count
+from scanner.tradeflow import build_tradeflow_layers
 from scanner.microstructure import (
     apply_micro_confirmation,
     apply_relaxed_micro_confirmation,
@@ -91,6 +96,8 @@ from storage.db import (
     save_market_cap,
     save_shareholder_filter,
     save_snapshot,
+    save_tradeflow_snapshot,
+    get_recent_tradeflow_snapshots,
     recent_screener_alert_exists,
     save_screener_alert,
 )
@@ -620,6 +627,43 @@ def should_run_filter2_fallback(primary_signal_count: int) -> bool:
     )
 
 
+def enrich_micro_with_tradeflow(
+    ticker: str,
+    micro: dict,
+    price: float | None,
+) -> dict:
+    """Persist and classify internal tradeflow data without changing signal rules."""
+    if not TRADEFLOW_INTERNAL_ENABLED:
+        return micro
+
+    save_tradeflow_snapshot(
+        ticker,
+        micro,
+        price=price,
+    )
+    history = get_recent_tradeflow_snapshots(
+        ticker,
+        limit=TRADEFLOW_TREND_SNAPSHOTS,
+    )
+    layers = build_tradeflow_layers(
+        micro,
+        history,
+        min_samples=TRADEFLOW_TREND_MIN_SNAPSHOTS,
+        flat_tolerance_pct=TRADEFLOW_TREND_FLAT_TOLERANCE_PCT,
+    )
+    output = {**micro, **layers}
+
+    print(
+        f"[TRADEFLOW] {ticker}: "
+        f"buy={format_rupiah_compact(output.get('aggressive_buy_value'))} "
+        f"sell={format_rupiah_compact(output.get('aggressive_sell_value'))} "
+        f"net={format_rupiah_compact(output.get('net_aggression_value'))} "
+        f"trend={output.get('aggression_trend')} "
+        f"samples={output.get('aggression_trend_samples')}"
+    )
+    return output
+
+
 def format_alert(result: dict) -> str:
     if result["phase"] == "EARLY_IGNITION":
         icon = "🔵"
@@ -1061,6 +1105,12 @@ def run_once() -> None:
         if micro is None:
             continue
 
+        micro = enrich_micro_with_tradeflow(
+            ticker,
+            micro,
+            result.get("price"),
+        )
+        primary_micro_results[ticker] = micro
         result = select_next_primary_phase(apply_micro_confirmation(result, micro))
         processed_primary.append(result)
         primary_processed_by_ticker[ticker] = result
@@ -1203,6 +1253,14 @@ def run_once() -> None:
             if micro is None:
                 continue
 
+            if ticker in fallback_micro_results:
+                micro = enrich_micro_with_tradeflow(
+                    ticker,
+                    micro,
+                    raw_result.get("price"),
+                )
+                fallback_micro_results[ticker] = micro
+
             result = apply_relaxed_micro_confirmation(raw_result, micro)
             if result["phase"] == "NONE":
                 evaluation_status[ticker] = "NO_SIGNAL"
@@ -1262,19 +1320,21 @@ def run_once() -> None:
                     "daily_change_pct": result.get("daily_change_pct"),
                     "interval_return_pct": result.get("interval_return_pct"),
                     "shareholder_count": result.get("shareholder_count"),
-                    "golden_pocket_lower": result.get("golden_pocket_lower"),
-                    "golden_pocket_upper": result.get("golden_pocket_upper"),
-                    "golden_pocket_lookback": result.get(
-                        "golden_pocket_lookback"
+                    "aggressive_buy_value": result.get(
+                        "aggressive_buy_value"
                     ),
-                    "golden_pocket_lower_5d": result.get(
-                        "golden_pocket_lower_5d"
+                    "aggressive_sell_value": result.get(
+                        "aggressive_sell_value"
                     ),
-                    "golden_pocket_upper_5d": result.get(
-                        "golden_pocket_upper_5d"
+                    "net_aggression_value": result.get(
+                        "net_aggression_value"
                     ),
-                    "golden_pocket_lookback_5d": result.get(
-                        "golden_pocket_lookback_5d"
+                    "aggression_trend": result.get("aggression_trend"),
+                    "aggression_trend_samples": result.get(
+                        "aggression_trend_samples"
+                    ),
+                    "aggression_trend_change_pct": result.get(
+                        "aggression_trend_change_pct"
                     ),
                 },
             )
