@@ -1,0 +1,67 @@
+name: PTSN Private Telegram Delivery Smoke
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ptsn_private_telegram_smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  private-delivery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Private PTSN momentum delivery — live Telegram API
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          from datetime import datetime, timedelta, timezone
+          from bot.notifier import send_telegram, get_telegram_targets
+          from scanner.ptsn_structure import build_ptsn_structure, format_ptsn_structure
+          WIB = timezone(timedelta(hours=7))
+          assert len(get_telegram_targets(target="private")) == 1, "Missing unique private destination"
+          t = datetime(2026, 10, 8, 9, 0, tzinfo=WIB)
+          prices = [379, 379, 380, 378, 380, 381, 382, 382, 382, 384]
+          snapshots = [{"ticker": "PTSN", "ts": (t + timedelta(minutes=5*i)).isoformat(), "last": float(p)} for i, p in enumerate(prices)]
+          features = {
+              "ticker": "PTSN", "price": 384.0, "daily_change_pct": 0.52,
+              "interval_return_pct": 0.52, "position_in_range": 0.78,
+              "volume_spike": 2.2, "value_spike": 1.7,
+              "frequency_spike": 1.8,
+          }
+          sample = build_ptsn_structure(snapshots, features)
+          assert sample and sample["stage"] == "WATCH", "Sample setup invalid"
+          message = (
+              "🧪 TES PENGIRIMAN TELEGRAM PRIBADI — BOT 4\n"
+              "Simulasi perhitungan PTSN; BUKAN SINYAL LIVE DAN BUKAN SARAN ENTRY.\n\n"
+              + format_ptsn_structure(sample)
+          )
+          response = send_telegram(message, target="private")
+          ok = (
+              response.get("ok") is True
+              and response.get("sent") == 1
+              and response.get("failed") == 0
+              and len(response.get("results") or []) == 1
+              and response["results"][0].get("ok") is True
+          )
+          print(f"PTSN_PRIVATE_TELEGRAM_DELIVERY_OK={ok}")
+          print(f"private_recipients={len(response.get('results') or [])}")
+          print(f"failed_requests={response.get('failed')}")
+          if not ok:
+              # Do not log chat ids or bot credentials.
+              safe_errors = [str(x.get("error", "")) for x in response.get("errors", [])]
+              print(f"Delivery errors: {safe_errors}")
+              raise SystemExit(1)
+          PY
