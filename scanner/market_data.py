@@ -135,32 +135,19 @@ def fetch_stock_summary(length: int = 5000) -> Any:
     )
 
 
-def get_stock_summary_row(ticker: str) -> dict[str, Any]:
-    row = _LAST_STOCK_SUMMARY_BY_TICKER.get(ticker.upper().strip())
-    return dict(row) if row else {}
-
-
-def discover_active_tickers(count: int | None = None) -> list[str]:
+def _index_stock_summary(payload: Any) -> list[dict[str, Any]]:
+    """Normalize one full IDX stock-summary payload and index it by ticker."""
     global _LAST_STOCK_SUMMARY_BY_TICKER
 
-    """Temukan saham aktif dari seluruh ringkasan IDX.
-
-    Ambil seluruh stock-summary lalu gabungkan Top N berdasarkan:
-    Frequency, Value, dan Volume. Ini lebih robust daripada bergantung
-    pada respons top-movers saja.
-    """
-    top_n = count or TOP_MOVER_COUNT
-    payload = _unwrap_project_payload(fetch_stock_summary(length=5000))
-
-    if isinstance(payload, dict):
-        rows = payload.get("data", [])
-    elif isinstance(payload, list):
-        rows = payload
+    normalized = _unwrap_project_payload(payload)
+    if isinstance(normalized, dict):
+        rows = normalized.get("data", [])
+    elif isinstance(normalized, list):
+        rows = normalized
     else:
         rows = []
 
     rows = [row for row in rows if isinstance(row, dict)]
-
     _LAST_STOCK_SUMMARY_BY_TICKER = {
         str(
             row.get("StockCode")
@@ -175,10 +162,47 @@ def discover_active_tickers(count: int | None = None) -> list[str]:
             or row.get("code")
         )
     }
+    return rows
+
+
+def collect_shared_market_snapshot(length: int = 5000) -> Any:
+    """Fetch/publish the common IDX snapshot through Project Fabric.
+
+    DataGateway stores this payload in the shared Neon cache when an upstream
+    ZAPI request is required. Other repos using namespace shared-v1 and the
+    same endpoint parameters can reuse it without another upstream request.
+    """
+    payload = fetch_stock_summary(length=length)
+    _index_stock_summary(payload)
+    return payload
+
+
+def market_cache_backend() -> str:
+    return _GATEWAY.cache_backend
+
+
+def get_stock_summary_row(ticker: str) -> dict[str, Any]:
+    row = _LAST_STOCK_SUMMARY_BY_TICKER.get(ticker.upper().strip())
+    return dict(row) if row else {}
+
+
+def discover_active_tickers(
+    count: int | None = None,
+    payload: Any | None = None,
+) -> list[str]:
+    """Temukan saham aktif dari seluruh ringkasan IDX.
+
+    Ambil seluruh stock-summary lalu gabungkan Top N berdasarkan Frequency,
+    Value, dan Volume. Payload collector dapat dipakai langsung sehingga
+    collector dan scanner membaca snapshot pasar yang sama.
+    """
+    top_n = count or TOP_MOVER_COUNT
+    if payload is None:
+        payload = fetch_stock_summary(length=5000)
+    rows = _index_stock_summary(payload)
 
     if not rows:
         return []
-
     def number(row: dict, key: str) -> float:
         value = row.get(key)
         try:

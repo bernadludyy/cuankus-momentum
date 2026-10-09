@@ -62,12 +62,14 @@ from scanner.engine import (
     should_alert,
 )
 from scanner.market_data import (
+    collect_shared_market_snapshot,
     discover_active_tickers,
     extract_market_cap,
     fetch_multi_quote,
     fetch_quote,
     get_stock_summary_row,
     fetch_stock_history,
+    market_cache_backend,
 )
 from scanner.market_hours import is_idx_market_window
 from scanner.shareholder_filter import fetch_latest_shareholder_count
@@ -794,8 +796,21 @@ def run_once() -> None:
 
     static_tickers = load_universe()
 
+    shared_market_payload = None
     try:
-        active_tickers = discover_active_tickers(TOP_MOVER_COUNT)
+        shared_market_payload = collect_shared_market_snapshot(length=5000)
+        print(
+            "[MARKET-COLLECTOR] IDX stock-summary ready "
+            f"via {market_cache_backend()} namespace=shared-v1"
+        )
+    except Exception as exc:
+        print(f"[WARN] market collector stock-summary gagal: {exc}")
+
+    try:
+        active_tickers = discover_active_tickers(
+            TOP_MOVER_COUNT,
+            payload=shared_market_payload,
+        )
         if not active_tickers:
             print("[WARN] dynamic discovery returned 0 ticker")
     except Exception as exc:
