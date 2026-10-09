@@ -42,6 +42,7 @@ from config import (
     FILTER2_IGNITION_MIN_MICRO_SCORE,
     FILTER2_IGNITION_MIN_AGGRESSIVE_BUY,
     FILTER2_MIN_POSITION_IN_RANGE,
+    TRADEFLOW_LOT_SIZE,
 )
 from scanner.market_data import fetch_orderbook, fetch_running_trades
 from scanner.market_hours import WIB
