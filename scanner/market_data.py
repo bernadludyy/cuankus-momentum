@@ -4,6 +4,7 @@ from typing import Any, Iterable
 import re
 
 from project_fabric.data_gateway import DataGateway, market_policy
+from project_fabric.universe_intelligence import publish_summary, publish_history
 
 from config import (
     ZPI_API_KEY,
@@ -174,6 +175,12 @@ def collect_shared_market_snapshot(length: int = 5000) -> Any:
     """
     payload = fetch_stock_summary(length=length)
     _index_stock_summary(payload)
+    try:
+        enriched = publish_summary(_GATEWAY.cache, payload)
+        print(f"[UNIVERSE-INTELLIGENCE] summary indexed={enriched['count']} source=stock-summary")
+    except Exception as exc:
+        # Non-critical enrichment must never interrupt existing market scans.
+        print(f"[UNIVERSE-INTELLIGENCE-WARN] summary: {type(exc).__name__}: {str(exc)[:160]}")
     return payload
 
 
@@ -234,8 +241,8 @@ def discover_active_tickers(
 
 
 def fetch_stock_history(ticker: str, length: int = 120) -> Any:
-    """Fetch daily IDX history used by Bot 4 liquidity filters."""
-    return _get_from_base(
+    """Reuse canonical 120-day history and publish derived features when available."""
+    payload = _get_from_base(
         ZPI_IDX_BASE_URL,
         "stock-history",
         {
@@ -243,6 +250,12 @@ def fetch_stock_history(ticker: str, length: int = 120) -> Any:
             "length": int(length),
         },
     )
+    if int(length) >= 30:
+        try:
+            publish_history(_GATEWAY.cache, ticker, payload)
+        except Exception as exc:
+            print(f"[UNIVERSE-INTELLIGENCE-WARN] history {ticker}: {type(exc).__name__}: {str(exc)[:160]}")
+    return payload
 
 
 def fetch_company_announcements(ticker: str, length: int = 50) -> Any:
