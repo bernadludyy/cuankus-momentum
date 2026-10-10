@@ -200,32 +200,19 @@ def format_signed_pct(value) -> str:
     return f"{float(value):+.2f}%"
 
 
-def format_market_cap(value) -> str:
+def _format_rupiah_indonesia(value, *, signed: bool = False) -> str:
     if value is None:
         return "-"
 
     number = float(value)
-    sign = "-" if number < 0 else ""
     amount = abs(number)
+    if signed:
+        sign = "+" if number > 0 else "-" if number < 0 else ""
+    else:
+        sign = "-" if number < 0 else ""
 
-    if amount >= 1e12:
-        return f"{sign}Rp{amount / 1e12:.2f}T"
-    if amount >= 1e9:
-        return f"{sign}Rp{amount / 1e9:.2f}B"
-    if amount >= 1e6:
-        return f"{sign}Rp{amount / 1e6:.2f}M"
-    return f"{sign}Rp{amount:,.0f}"
-
-
-def format_rupiah_compact(value) -> str:
-    if value is None:
-        return "-"
-    number = float(value)
-    sign = "+" if number > 0 else "-" if number < 0 else ""
-    amount = abs(number)
-
-    def dec(value: float) -> str:
-        return f"{value:.2f}".replace(".", ",")
+    def dec(raw: float) -> str:
+        return f"{raw:.2f}".replace(".", ",")
 
     if amount >= 1e12:
         return f"Rp {sign}{dec(amount / 1e12)} Triliun"
@@ -236,6 +223,20 @@ def format_rupiah_compact(value) -> str:
     if amount >= 1e3:
         return f"Rp {sign}{dec(amount / 1e3)} Ribu"
     return f"Rp {sign}{amount:,.0f}"
+
+
+def format_market_cap(value) -> str:
+    return _format_rupiah_indonesia(value, signed=False)
+
+
+def format_rupiah_compact(value) -> str:
+    """Gross/non-net rupiah amount: positive values have no '+' prefix."""
+    return _format_rupiah_indonesia(value, signed=False)
+
+
+def format_rupiah_signed(value) -> str:
+    """Net/directional rupiah amount: preserve + / - direction."""
+    return _format_rupiah_indonesia(value, signed=True)
 
 
 def format_price(value) -> str:
@@ -691,7 +692,7 @@ def enrich_micro_with_tradeflow(
         f"[TRADEFLOW] {ticker}: "
         f"buy={format_rupiah_compact(output.get('aggressive_buy_value'))} "
         f"sell={format_rupiah_compact(output.get('aggressive_sell_value'))} "
-        f"net={format_rupiah_compact(output.get('net_aggression_value'))} "
+        f"net={format_rupiah_signed(output.get('net_aggression_value'))} "
         f"trend={output.get('aggression_trend')} "
         f"samples={output.get('aggression_trend_samples')}"
     )
@@ -789,7 +790,8 @@ def format_alert(
         f"{lane_name}{rank_text}\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"📌 {result['ticker']} | {format_price(result.get('price'))}\n"
-        f"⭐ Quality: {format_num(result.get('quality_score'), '/100')} "
+        f"⭐ Quality: "
+        f"{format_num(result.get('quality_score'), '/100') if result.get('quality_score') is not None else 'N/A (data historis pre-V2)'} "
         f"| Momentum: {format_num(result.get('score'), '/100')}\n\n"
 
         "💧 LIKUIDITAS\n"
@@ -804,7 +806,7 @@ def format_alert(
         f"• Agg Buy: {format_rupiah_compact(result.get('aggressive_buy_value'))}\n"
         f"• Agg Sell: {format_rupiah_compact(result.get('aggressive_sell_value'))}\n"
         f"• Net Aggression: "
-        f"{format_rupiah_compact(result.get('net_aggression_value'))}\n"
+        f"{format_rupiah_signed(result.get('net_aggression_value'))}\n"
         f"• Aggression Trend: {_trend_label(result.get('aggression_trend'))}\n"
         f"• Selling Absorption: {absorption} {absorption_icon}\n"
         f"• Agg Buy Ratio: "
@@ -828,7 +830,7 @@ def format_alert(
         "🌍 FOREIGN FLOW\n"
         f"• Score: {format_num(result.get('foreign_score'), '/100')}\n"
         f"• Status: {result.get('foreign_status') or 'UNAVAILABLE'}\n"
-        f"• Net Value: {format_rupiah_compact(result.get('net_foreign_value'))}\n"
+        f"• Net Value: {format_rupiah_signed(result.get('net_foreign_value'))}\n"
         f"• Net Ratio: {format_signed_pct(result.get('net_foreign_ratio_pct'))}\n"
         f"• Buy Dominance: "
         f"{format_num(result.get('foreign_buy_dominance_pct'), '%')}"
