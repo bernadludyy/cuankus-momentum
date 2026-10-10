@@ -84,6 +84,7 @@ from scanner.market_hours import is_idx_market_window
 from scanner.shareholder_filter import fetch_latest_shareholder_count
 from scanner.tradeflow import build_tradeflow_layers
 from scanner.quality import build_quality_metrics
+from scanner.liquidity_observer import build_dynamic_liquidity_observation
 from scanner.microstructure import (
     apply_micro_confirmation,
     apply_relaxed_micro_confirmation,
@@ -624,7 +625,12 @@ def add_eligible_from_pool(
         if not prepare_market_cap_candidate(result):
             continue
 
-        if not prepare_daily_filter_candidate(result):
+        daily_eligible = prepare_daily_filter_candidate(result)
+        record_dynamic_liquidity_observation(
+            result,
+            lane=f"FILTER1_{screener_tag}",
+        )
+        if not daily_eligible:
             continue
 
         if not prepare_shareholder_candidate(result):
@@ -651,6 +657,40 @@ def prepare_shareholder_candidate_from_cache(ticker: str) -> bool:
     if not cached:
         return False
     return shareholder_is_eligible(cached.get("holder_count"))
+
+
+def record_dynamic_liquidity_observation(
+    result: dict,
+    *,
+    lane: str,
+) -> bool:
+    """Persist the dynamic-liquidity idea to Neon without affecting signals."""
+    observation = build_dynamic_liquidity_observation(result, lane=lane)
+    if observation is None:
+        return False
+
+    ticker = str(result.get("ticker") or "").upper().strip()
+    if not ticker:
+        return False
+
+    event_id = f"dynamic-liquidity:{_OBS.run_id}:{ticker}"
+    _OBS.record_signal(
+        signal_type="DYNAMIC_LIQUIDITY_MATCH",
+        entity=ticker,
+        score=result.get("score"),
+        status="observed_only",
+        payload=observation,
+        event_id=event_id,
+    )
+    print(
+        f"[DYNAMIC-LIQUIDITY-OBS] {ticker}: "
+        f"lane={lane} "
+        f"cap={format_market_cap(observation.get('market_cap'))} "
+        f"ma50={format_rupiah_compact(observation.get('transaction_value_ma50'))} "
+        f"need>={format_rupiah_compact(observation.get('dynamic_threshold'))} "
+        f"turnover={format_num(observation.get('ma50_to_market_cap_pct'), '%')}"
+    )
+    return True
 
 
 def should_run_filter2_fallback(primary_signal_count: int) -> bool:
@@ -1313,7 +1353,12 @@ def run_once() -> None:
                 continue
             if not prepare_market_cap_candidate(result):
                 continue
-            if not prepare_relaxed_daily_filter_candidate(result):
+            relaxed_daily_eligible = prepare_relaxed_daily_filter_candidate(result)
+            record_dynamic_liquidity_observation(
+                result,
+                lane="FILTER2_RELAXED",
+            )
+            if not relaxed_daily_eligible:
                 continue
             if not prepare_shareholder_candidate(result):
                 continue
@@ -1644,6 +1689,17 @@ def run_once() -> None:
                 continue
 
             metrics = get_cached_daily_filter(ticker, max_age_hours=DAILY_FILTER_CACHE_HOURS)
+            if metrics:
+                observation_result = {
+                    **features,
+                    **metrics,
+                    "ticker": ticker,
+                    "market_cap": cap,
+                }
+                record_dynamic_liquidity_observation(
+                    observation_result,
+                    lane="PTSN_STRUCTURE",
+                )
             if DAILY_FILTER_ENABLED and (
                 not metrics or not metrics.get("enough_history")
                 or metrics.get("value_ma") is None
