@@ -45,6 +45,11 @@ from config import (
     VOLUME_MA_RATIO_MIN,
     VALUE_MA_WINDOW,
     MIN_VALUE_MA_IDR,
+    FILTER1_VALUE_MA50_ENABLED,
+    FILTER1_VALUE_MA50_WINDOW,
+    FILTER1_MIN_VALUE_MA50_IDR,
+    FILTER1_TOP_N_ALERTS_PER_CYCLE,
+    QUALITY_SCORE_ENABLED,
     TOP_MOVER_COUNT,
     USE_MULTI_QUOTE,
     TRADEFLOW_INTERNAL_ENABLED,
@@ -78,6 +83,7 @@ from scanner.market_data import (
 from scanner.market_hours import is_idx_market_window
 from scanner.shareholder_filter import fetch_latest_shareholder_count
 from scanner.tradeflow import build_tradeflow_layers
+from scanner.quality import build_quality_metrics
 from scanner.microstructure import (
     apply_micro_confirmation,
     apply_relaxed_micro_confirmation,
