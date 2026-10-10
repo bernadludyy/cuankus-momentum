@@ -7,6 +7,9 @@ from config import (
     DAILY_FILTER_ENABLED,
     MIN_VALUE_MA_IDR,
     VALUE_MA_WINDOW,
+    FILTER1_VALUE_MA50_WINDOW,
+    FILTER1_VALUE_MA50_ENABLED,
+    FILTER1_MIN_VALUE_MA50_IDR,
     VOLUME_MA_LONG,
     VOLUME_MA_RATIO_MIN,
     VOLUME_MA_SHORT,
@@ -175,7 +178,11 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
 
     rows.sort(key=lambda x: x["date"])
 
-    required = max(VOLUME_MA_LONG, VALUE_MA_WINDOW)
+    required = max(
+        VOLUME_MA_LONG,
+        VALUE_MA_WINDOW,
+        FILTER1_VALUE_MA50_WINDOW,
+    )
     history_days = len(rows)
     golden = _compute_bullish_golden_pocket(rows)
     tactical_raw = _compute_bullish_golden_pocket(
@@ -201,6 +208,7 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
             "volume_ma_long": None,
             "volume_ma_ratio": None,
             "value_ma": None,
+            "transaction_value_ma50": None,
             "enough_history": False,
             **golden,
             **tactical_golden,
@@ -209,10 +217,18 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
     short_volumes = [x["volume"] for x in rows[-VOLUME_MA_SHORT:]]
     long_volumes = [x["volume"] for x in rows[-VOLUME_MA_LONG:]]
     recent_values = [x["value"] for x in rows[-VALUE_MA_WINDOW:]]
+    value_ma50_values = [
+        x["value"] for x in rows[-FILTER1_VALUE_MA50_WINDOW:]
+    ]
 
     volume_ma_short = sum(short_volumes) / len(short_volumes)
     volume_ma_long = sum(long_volumes) / len(long_volumes)
     value_ma = sum(recent_values) / len(recent_values)
+    transaction_value_ma50 = (
+        sum(value_ma50_values) / len(value_ma50_values)
+        if len(value_ma50_values) >= FILTER1_VALUE_MA50_WINDOW
+        else None
+    )
 
     volume_ma_ratio = (
         volume_ma_short / volume_ma_long
@@ -226,6 +242,7 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
         "volume_ma_long": volume_ma_long,
         "volume_ma_ratio": volume_ma_ratio,
         "value_ma": value_ma,
+        "transaction_value_ma50": transaction_value_ma50,
         "enough_history": True,
         **golden,
         **tactical_golden,
@@ -240,11 +257,18 @@ def daily_filter_is_eligible(metrics: dict | None) -> bool:
 
     ratio = metrics.get("volume_ma_ratio")
     value_ma = metrics.get("value_ma")
+    value_ma50 = metrics.get("transaction_value_ma50")
 
     if ratio is None or value_ma is None:
+        return False
+    if FILTER1_VALUE_MA50_ENABLED and value_ma50 is None:
         return False
 
     return (
         float(ratio) >= VOLUME_MA_RATIO_MIN
         and float(value_ma) > MIN_VALUE_MA_IDR
+        and (
+            not FILTER1_VALUE_MA50_ENABLED
+            or float(value_ma50) >= FILTER1_MIN_VALUE_MA50_IDR
+        )
     )

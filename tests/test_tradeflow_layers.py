@@ -147,25 +147,31 @@ class TradeflowLayerTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[-1]["net_aggression_value"], 1_200)
 
-    def test_new_tradeflow_layers_are_not_in_telegram_yet(self):
+    def test_tradeflow_layers_are_in_new_telegram_format(self):
         result = {
             "phase": "PRE_MOMENTUM",
             "ticker": "TEST",
             "price": 100,
             "score": 70,
+            "quality_score": 79,
             "leakage_score": 60,
             "momentum_score": 70,
+            "ignition_score": 65,
             "aggressive_buy_value": 2_000_000_000,
             "aggressive_sell_value": 500_000_000,
             "net_aggression_value": 1_500_000_000,
             "aggression_trend": "RISING",
+            "selling_absorption": "CONFIRMED",
+            "transaction_value_ma50": 8_000_000_000,
         }
 
-        text = main.format_alert(result)
+        text = main.format_alert(result, rank=1)
 
-        self.assertNotIn("Net Aggression", text)
-        self.assertNotIn("Aggression Trend", text)
-        self.assertNotIn("Aggressive Buy Value", text)
+        self.assertIn("Net Aggression", text)
+        self.assertIn("Aggression Trend", text)
+        self.assertIn("Selling Absorption", text)
+        self.assertIn("Tx Value MA50", text)
+        self.assertNotIn("GOLDEN POCKET", text)
 
 
 if __name__ == "__main__":

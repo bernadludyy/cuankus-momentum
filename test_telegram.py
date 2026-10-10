@@ -18,6 +18,7 @@ sample_result = {
     "foreign_buy_dominance_pct": 44.39,
     "volume_ma_ratio": 2.67,
     "value_ma": 10_610_000_000,
+    "transaction_value_ma50": 12_800_000_000,
     "shareholder_count": None,
     "swing_low_5d": 74.0,
     "swing_high_5d": 81.0,
@@ -40,7 +41,13 @@ sample_result = {
     "frequency_spike": 1.0,
     "breakout_pct": 1.28,
     "micro_score": 95.0,
-    "aggressive_buy_ratio": 1.0,
+    "aggressive_buy_ratio": 0.78,
+    "aggressive_buy_value": 2_100_000_000,
+    "aggressive_sell_value": 650_000_000,
+    "net_aggression_value": 1_450_000_000,
+    "aggression_trend": "RISING",
+    "selling_absorption": "CONFIRMED",
+    "quality_score": 89.4,
     "bid_percent": 71.0,
     "reasons": [
         "FORMAT PREVIEW - bukan sinyal perdagangan",
@@ -51,7 +58,7 @@ sample_result = {
 messages = [
     (
         "🧪 FORMAT PREVIEW BOT 4 — SCREENER 1 — BUKAN SINYAL\n\n"
-        + format_alert(sample_result)
+        + format_alert(sample_result, rank=1)
     ),
     (
         "🧪 BOT 4 — FILTER 2 RELAXED LIVE — PREVIEW, BUKAN SINYAL\n\n"

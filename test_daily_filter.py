@@ -17,7 +17,8 @@ print(f"Volume MA10: {metrics.get('volume_ma_short')}")
 print(f"Volume MA100: {metrics.get('volume_ma_long')}")
 print(f"Volume MA10/MA100: {metrics.get('volume_ma_ratio')}")
 print(f"Value MA5: {metrics.get('value_ma')}")
-print(f"Eligible: {daily_filter_is_eligible(metrics)}")
+print(f"Transaction Value MA50: {metrics.get('transaction_value_ma50')}")
+print(f"Eligible Filter 1 V2: {daily_filter_is_eligible(metrics)}")
 
 if int(metrics.get("history_days") or 0) <= 0:
     raise RuntimeError("IDX stock-history tidak mengembalikan data harian.")

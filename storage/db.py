@@ -147,6 +147,7 @@ def init_db() -> None:
             volume_ma_long REAL,
             volume_ma_ratio REAL,
             value_ma REAL,
+            transaction_value_ma50 REAL,
             history_days INTEGER NOT NULL,
             enough_history INTEGER NOT NULL,
             swing_low REAL,
@@ -174,6 +175,7 @@ def init_db() -> None:
         for row in cur.execute("PRAGMA table_info(daily_filter_cache)").fetchall()
     }
     for column_name, column_type in (
+        ("transaction_value_ma50", "REAL"),
         ("swing_low", "REAL"),
         ("swing_high", "REAL"),
         ("swing_low_date", "TEXT"),
@@ -574,6 +576,7 @@ def get_cached_daily_filter(
             volume_ma_long,
             volume_ma_ratio,
             value_ma,
+            transaction_value_ma50,
             history_days,
             enough_history,
             swing_low,
@@ -613,6 +616,7 @@ def get_cached_daily_filter(
         "volume_ma_long": row["volume_ma_long"],
         "volume_ma_ratio": row["volume_ma_ratio"],
         "value_ma": row["value_ma"],
+        "transaction_value_ma50": row["transaction_value_ma50"],
         "history_days": int(row["history_days"]),
         "enough_history": bool(row["enough_history"]),
         "swing_low": row["swing_low"],
@@ -644,6 +648,7 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
             volume_ma_long,
             volume_ma_ratio,
             value_ma,
+            transaction_value_ma50,
             history_days,
             enough_history,
             swing_low,
@@ -663,7 +668,7 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
             ts
         )
         VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
         ON CONFLICT(ticker) DO UPDATE SET
@@ -671,6 +676,7 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
             volume_ma_long = excluded.volume_ma_long,
             volume_ma_ratio = excluded.volume_ma_ratio,
             value_ma = excluded.value_ma,
+            transaction_value_ma50 = excluded.transaction_value_ma50,
             history_days = excluded.history_days,
             enough_history = excluded.enough_history,
             swing_low = excluded.swing_low,
@@ -695,6 +701,7 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
             metrics.get("volume_ma_long"),
             metrics.get("volume_ma_ratio"),
             metrics.get("value_ma"),
+            metrics.get("transaction_value_ma50"),
             int(metrics.get("history_days") or 0),
             1 if metrics.get("enough_history") else 0,
             metrics.get("swing_low"),

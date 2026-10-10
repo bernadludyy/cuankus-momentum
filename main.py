@@ -45,6 +45,11 @@ from config import (
     VOLUME_MA_RATIO_MIN,
     VALUE_MA_WINDOW,
     MIN_VALUE_MA_IDR,
+    FILTER1_VALUE_MA50_ENABLED,
+    FILTER1_VALUE_MA50_WINDOW,
+    FILTER1_MIN_VALUE_MA50_IDR,
+    FILTER1_TOP_N_ALERTS_PER_CYCLE,
+    QUALITY_SCORE_ENABLED,
     TOP_MOVER_COUNT,
     USE_MULTI_QUOTE,
     TRADEFLOW_INTERNAL_ENABLED,
@@ -78,6 +83,7 @@ from scanner.market_data import (
 from scanner.market_hours import is_idx_market_window
 from scanner.shareholder_filter import fetch_latest_shareholder_count
 from scanner.tradeflow import build_tradeflow_layers
+from scanner.quality import build_quality_metrics
 from scanner.microstructure import (
     apply_micro_confirmation,
     apply_relaxed_micro_confirmation,
@@ -212,7 +218,24 @@ def format_market_cap(value) -> str:
 
 
 def format_rupiah_compact(value) -> str:
-    return format_market_cap(value)
+    if value is None:
+        return "-"
+    number = float(value)
+    sign = "+" if number > 0 else "-" if number < 0 else ""
+    amount = abs(number)
+
+    def dec(value: float) -> str:
+        return f"{value:.2f}".replace(".", ",")
+
+    if amount >= 1e12:
+        return f"Rp {sign}{dec(amount / 1e12)} Triliun"
+    if amount >= 1e9:
+        return f"Rp {sign}{dec(amount / 1e9)} Miliar"
+    if amount >= 1e6:
+        return f"Rp {sign}{dec(amount / 1e6)} Juta"
+    if amount >= 1e3:
+        return f"Rp {sign}{dec(amount / 1e3)} Ribu"
+    return f"Rp {sign}{amount:,.0f}"
 
 
 def format_price(value) -> str:
@@ -424,6 +447,10 @@ def get_daily_filter_metrics(ticker: str) -> dict:
     )
     if (
         cached is not None
+        and (
+            not FILTER1_VALUE_MA50_ENABLED
+            or cached.get("transaction_value_ma50") is not None
+        )
         and cached.get("golden_pocket_lookback") == 20
         and cached.get("golden_pocket_lookback_5d") == 5
         and cached.get("swing_low") not in (0, 0.0)
@@ -464,6 +491,9 @@ def prepare_daily_filter_candidate(result: dict) -> bool:
         result["volume_ma_long"] = metrics.get("volume_ma_long")
         result["volume_ma_ratio"] = metrics.get("volume_ma_ratio")
         result["value_ma"] = metrics.get("value_ma")
+        result["transaction_value_ma50"] = metrics.get(
+            "transaction_value_ma50"
+        )
         result["history_days"] = metrics.get("history_days")
         result["enough_history"] = metrics.get("enough_history")
         result["swing_low"] = metrics.get("swing_low")
@@ -501,6 +531,9 @@ def prepare_daily_filter_candidate(result: dict) -> bool:
             f"ValueMA{VALUE_MA_WINDOW}="
             f"{format_rupiah_compact(result.get('value_ma'))} "
             f"need>{format_rupiah_compact(MIN_VALUE_MA_IDR)}; "
+            f"ValueMA{FILTER1_VALUE_MA50_WINDOW}="
+            f"{format_rupiah_compact(result.get('transaction_value_ma50'))} "
+            f"need>={format_rupiah_compact(FILTER1_MIN_VALUE_MA50_IDR)}; "
             f"history={result.get('history_days', 0)}"
         )
 
@@ -525,7 +558,8 @@ def prepare_relaxed_daily_filter_candidate(result: dict) -> bool:
     if metrics:
         for key in (
             "volume_ma_short", "volume_ma_long", "volume_ma_ratio", "value_ma",
-            "history_days", "enough_history", "swing_low", "swing_high",
+            "transaction_value_ma50", "history_days", "enough_history",
+            "swing_low", "swing_high",
             "swing_low_date", "swing_high_date", "golden_pocket_lower",
             "golden_pocket_upper", "golden_pocket_lookback", "swing_low_5d",
             "swing_high_5d", "swing_low_date_5d", "swing_high_date_5d",
@@ -664,90 +698,152 @@ def enrich_micro_with_tradeflow(
     return output
 
 
-def format_alert(result: dict) -> str:
-    if result["phase"] == "EARLY_IGNITION":
-        icon = "🔵"
-        title = "EARLY IGNITION"
-    elif result["phase"] == "PRE_MOMENTUM":
-        icon = "🟠"
-        title = "PRE-MOMENTUM WATCH"
-    elif result["phase"] == "EARLY_LEAKAGE":
-        icon = "🟡"
-        title = "EARLY SMART-MONEY LEAKAGE"
-    else:
-        icon = "🚀"
-        title = "POWERFUL MOMENTUM CONFIRMED"
+def enrich_result_with_quality(result: dict) -> dict:
+    """Attach Bot 4 V2 soft quality metrics after microstructure confirmation."""
+    if not QUALITY_SCORE_ENABLED:
+        output = dict(result)
+        output.setdefault("quality_score", float(result.get("score") or 0.0))
+        return output
+    return {**result, **build_quality_metrics(result)}
+
+
+def _quality_sort_key(result: dict) -> tuple[float, float, int, str]:
+    phase_rank = {
+        "EARLY_IGNITION": 1,
+        "PRE_MOMENTUM": 2,
+        "POWERFUL_MOMENTUM": 3,
+    }.get(str(result.get("phase") or ""), 0)
+    return (
+        float(result.get("quality_score") or 0.0),
+        float(result.get("score") or 0.0),
+        phase_rank,
+        str(result.get("ticker") or ""),
+    )
+
+
+def rank_top_n_candidates(
+    candidates: list[dict],
+    limit: int,
+) -> tuple[list[dict], list[dict]]:
+    ranked = sorted(candidates, key=_quality_sort_key, reverse=True)
+    safe_limit = max(0, int(limit))
+    return ranked[:safe_limit], ranked[safe_limit:]
+
+
+def _trend_label(value) -> str:
+    return {
+        "RISING": "RISING ↗",
+        "FALLING": "FALLING ↘",
+        "FLAT": "FLAT →",
+        "MIXED": "MIXED ↕",
+        "INSUFFICIENT_HISTORY": "WAIT DATA",
+    }.get(str(value or ""), "-")
+
+
+def _phase_title(phase: str | None) -> tuple[str, str]:
+    return {
+        "EARLY_IGNITION": ("🔵", "EARLY IGNITION"),
+        "PRE_MOMENTUM": ("🟠", "PRE-MOMENTUM"),
+        "EARLY_LEAKAGE": ("🟡", "EARLY SMART-MONEY LEAKAGE"),
+        "POWERFUL_MOMENTUM": ("🚀", "POWERFUL MOMENTUM"),
+    }.get(phase or "", ("📡", phase or "MOMENTUM"))
+
+
+def format_alert(
+    result: dict,
+    rank: int | None = None,
+    lane: str | None = None,
+) -> str:
+    icon, title = _phase_title(result.get("phase"))
+    lane_name = lane or (
+        "FILTER 2 — RELAXED"
+        if result.get("filter2_relaxed")
+        else "FILTER 1 — STRICT"
+    )
+    rank_text = f" | TOP #{rank}" if rank is not None else ""
+
+    ma50_rule = (
+        f"(referensi F1 min {format_rupiah_compact(FILTER1_MIN_VALUE_MA50_IDR)})"
+        if result.get("filter2_relaxed")
+        else f"(min {format_rupiah_compact(FILTER1_MIN_VALUE_MA50_IDR)})"
+    )
+
+    absorption = str(result.get("selling_absorption") or "NONE")
+    absorption_icon = {
+        "CONFIRMED": "✅",
+        "WATCH": "🟡",
+        "NONE": "—",
+    }.get(absorption, "—")
 
     reasons = "\n".join(
-        f"• {x}" for x in result.get("reasons", [])[:5]
+        f"• {x}" for x in result.get("reasons", [])[:3]
     )
     reasons_section = (
-        f"\n\n🧭 SIGNAL REASONS\n{reasons}"
+        f"\n\n🧭 ALASAN SINYAL\n{reasons}"
         if reasons
         else ""
     )
 
-    score_header = (
-        "📊 FILTER 2 — RELAXED MOMENTUM SCORE\n"
-        if result.get("filter2_relaxed")
-        else "📊 FILTER 1 — MOMENTUM SCORE\n"
-    )
-
     return (
-        f"{icon} {title}\n"
+        f"{icon} BOT 4 — {title}\n"
+        f"{lane_name}{rank_text}\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        f"📌 {result['ticker']} | Price: {format_price(result.get('price'))}\n\n"
-        f"{score_header}"
-        f"Score: {result['score']}/100\n"
-        f"Leakage: {result['leakage_score']}/100\n"
-        f"Momentum: {result['momentum_score']}/100\n"
-        f"Ignition: {format_num(result.get('ignition_score'), '/100')}\n\n"
-        "🌍 FUNDAMENTAL & FLOW\n"
-        f"Market Cap: {format_market_cap(result.get('market_cap'))}\n"
-        f"Foreign Score: {format_num(result.get('foreign_score'), '/100')}\n"
-        f"Foreign Status: {result.get('foreign_status') or 'UNAVAILABLE'}\n"
-        f"Net Foreign Value: "
-        f"{format_rupiah_compact(result.get('net_foreign_value'))}\n"
-        f"Net Foreign Ratio: "
-        f"{format_signed_pct(result.get('net_foreign_ratio_pct'))}\n"
-        f"Foreign Buy Dominance: "
-        f"{format_num(result.get('foreign_buy_dominance_pct'), '%')}\n"
-        f"Vol MA10/MA100: {format_num(result.get('volume_ma_ratio'), 'x')}\n"
-        f"Value MA5: {format_rupiah_compact(result.get('value_ma'))}\n"
-        f"Number of Shareholders: "
-        f"{format_shareholder_count(result.get('shareholder_count'))}\n\n"
-        f"{format_golden_pocket(result, suffix='5d')}\n\n"
-        f"{format_golden_pocket(result)}\n\n"
-        "⚡ LIVE MOMENTUM\n"
-        f"Daily: {format_num(result.get('daily_change_pct'), '%')}\n"
-        f"Interval: {format_num(result.get('interval_return_pct'), '%')}\n"
-        f"Volume: {format_num(result.get('volume_spike'), 'x')}\n"
-        f"Value: {format_num(result.get('value_spike'), 'x')}\n"
-        f"Frequency: {format_num(result.get('frequency_spike'), 'x')}\n"
-        f"Breakout: {format_num(result.get('breakout_pct'), '%')}\n"
-        f"Microstructure: {format_num(result.get('micro_score'), '/100')}\n"
-        f"Aggressive Buy: "
+        f"📌 {result['ticker']} | {format_price(result.get('price'))}\n"
+        f"⭐ Quality: {format_num(result.get('quality_score'), '/100')} "
+        f"| Momentum: {format_num(result.get('score'), '/100')}\n\n"
+
+        "💧 LIKUIDITAS\n"
+        f"• Tx Value MA50: "
+        f"{format_rupiah_compact(result.get('transaction_value_ma50'))} "
+        f"{ma50_rule}\n"
+        f"• Value MA5: {format_rupiah_compact(result.get('value_ma'))}\n"
+        f"• Vol MA10/MA100: {format_num(result.get('volume_ma_ratio'), 'x')}\n"
+        f"• Market Cap: {format_market_cap(result.get('market_cap'))}\n\n"
+
+        "🧠 SMART MONEY / TRADEFLOW\n"
+        f"• Agg Buy: {format_rupiah_compact(result.get('aggressive_buy_value'))}\n"
+        f"• Agg Sell: {format_rupiah_compact(result.get('aggressive_sell_value'))}\n"
+        f"• Net Aggression: "
+        f"{format_rupiah_compact(result.get('net_aggression_value'))}\n"
+        f"• Aggression Trend: {_trend_label(result.get('aggression_trend'))}\n"
+        f"• Selling Absorption: {absorption} {absorption_icon}\n"
+        f"• Agg Buy Ratio: "
         f"{format_num((result.get('aggressive_buy_ratio') or 0) * 100, '%')}\n"
-        f"Bid Dominance: {format_num(result.get('bid_percent'), '%')}"
+        f"• Bid Dominance: {format_num(result.get('bid_percent'), '%')}\n"
+        f"• Microstructure: {format_num(result.get('micro_score'), '/100')}\n\n"
+
+        "⚡ MOMENTUM\n"
+        f"• Daily: {format_signed_pct(result.get('daily_change_pct'))}\n"
+        f"• Interval: {format_signed_pct(result.get('interval_return_pct'))}\n"
+        f"• Volume / Value / Freq: "
+        f"{format_num(result.get('volume_spike'), 'x')} / "
+        f"{format_num(result.get('value_spike'), 'x')} / "
+        f"{format_num(result.get('frequency_spike'), 'x')}\n"
+        f"• Breakout: {format_signed_pct(result.get('breakout_pct'))}\n"
+        f"• Leakage / Momentum / Ignition: "
+        f"{format_num(result.get('leakage_score'), '')} / "
+        f"{format_num(result.get('momentum_score'), '')} / "
+        f"{format_num(result.get('ignition_score'), '')}\n\n"
+
+        "🌍 FOREIGN FLOW\n"
+        f"• Score: {format_num(result.get('foreign_score'), '/100')}\n"
+        f"• Status: {result.get('foreign_status') or 'UNAVAILABLE'}\n"
+        f"• Net Value: {format_rupiah_compact(result.get('net_foreign_value'))}\n"
+        f"• Net Ratio: {format_signed_pct(result.get('net_foreign_ratio_pct'))}\n"
+        f"• Buy Dominance: "
+        f"{format_num(result.get('foreign_buy_dominance_pct'), '%')}"
         f"{reasons_section}\n\n"
-        "⚠️ Scanner signal, bukan jaminan harga akan naik."
+        "⚠️ Scanner signal — tetap gunakan risk management."
     )
 
 
 def format_filter2_alert(result: dict, rank: int) -> str:
-    phase_label = {
-        "EARLY_IGNITION": "EARLY IGNITION",
-        "EARLY_LEAKAGE": "EARLY SMART-MONEY LEAKAGE",
-        "PRE_MOMENTUM": "PRE-MOMENTUM WATCH",
-        "POWERFUL_MOMENTUM": "POWERFUL MOMENTUM",
-    }.get(result.get("phase"), result.get("phase") or "RELAXED MOMENTUM")
-
-    return (
-        f"🟢 BOT 4 — FILTER 2 / RELAXED MOMENTUM #{rank}\n"
-        f"Phase: {phase_label}\n"
-        "ℹ️ Threshold momentum lebih longgar; anti-falling-knife tetap wajib.\n\n"
-        + format_alert(result)
+    return format_alert(
+        result,
+        rank=rank,
+        lane="FILTER 2 — RELAXED FALLBACK",
     )
+
 
 def enrich_quote_from_stock_summary(quote: dict) -> dict:
     """Backfill cumulative activity fields from IDX stock-summary."""
@@ -1111,7 +1207,10 @@ def run_once() -> None:
             result.get("price"),
         )
         primary_micro_results[ticker] = micro
-        result = select_next_primary_phase(apply_micro_confirmation(result, micro))
+        result = select_next_primary_phase(
+            apply_micro_confirmation(result, micro)
+        )
+        result = enrich_result_with_quality(result)
         processed_primary.append(result)
         primary_processed_by_ticker[ticker] = result
 
@@ -1121,7 +1220,8 @@ def run_once() -> None:
             f"buy={format_num((result.get('aggressive_buy_ratio') or 0) * 100, '%')} "
             f"bid={format_num(result.get('bid_percent'), '%')} "
             f"phase={result['phase']} "
-            f"score={result['score']}"
+            f"score={result['score']} "
+            f"quality={result.get('quality_score')}"
         )
 
         if result["phase"] == "NONE":
@@ -1163,6 +1263,9 @@ def run_once() -> None:
             {
                 "volume_ma_ratio": result.get("volume_ma_ratio"),
                 "value_ma": result.get("value_ma"),
+                "transaction_value_ma50": result.get(
+                    "transaction_value_ma50"
+                ),
                 "history_days": result.get("history_days"),
                 "enough_history": result.get("enough_history"),
             }
@@ -1262,6 +1365,7 @@ def run_once() -> None:
                 fallback_micro_results[ticker] = micro
 
             result = apply_relaxed_micro_confirmation(raw_result, micro)
+            result = enrich_result_with_quality(result)
             if result["phase"] == "NONE":
                 evaluation_status[ticker] = "NO_SIGNAL"
             else:
@@ -1273,6 +1377,7 @@ def run_once() -> None:
                 f"phase={result.get('phase')} "
                 f"score={result.get('score')} "
                 f"micro={result.get('micro_score')} "
+                f"quality={result.get('quality_score')} "
                 f"anti_knife={result.get('anti_falling_knife_relaxed_pass')}"
             )
     elif FILTER2_ENABLED:
@@ -1302,69 +1407,13 @@ def run_once() -> None:
 
     primary_alerted_tickers: set[str] = set()
 
+    # Lifecycle first, ranking second: same-phase repeats and downgrades never
+    # compete for Top-N. Only genuinely new setups or phase upgrades are ranked.
+    primary_alert_pool: list[dict] = []
     for result in eligible_candidates:
         ticker = result["ticker"]
-
         if should_alert(result):
-            signal_event_id = _OBS.record_signal(
-                signal_type=result["phase"],
-                entity=ticker,
-                score=result.get("score"),
-                status="alert_candidate",
-                payload={
-                    "price": result.get("price"),
-                    "foreign_score": result.get("foreign_score"),
-                    "foreign_status": result.get("foreign_status"),
-                    "micro_score": result.get("micro_score"),
-                    "selected_by": result.get("_selected_by"),
-                    "daily_change_pct": result.get("daily_change_pct"),
-                    "interval_return_pct": result.get("interval_return_pct"),
-                    "shareholder_count": result.get("shareholder_count"),
-                    "aggressive_buy_value": result.get(
-                        "aggressive_buy_value"
-                    ),
-                    "aggressive_sell_value": result.get(
-                        "aggressive_sell_value"
-                    ),
-                    "net_aggression_value": result.get(
-                        "net_aggression_value"
-                    ),
-                    "aggression_trend": result.get("aggression_trend"),
-                    "aggression_trend_samples": result.get(
-                        "aggression_trend_samples"
-                    ),
-                    "aggression_trend_change_pct": result.get(
-                        "aggression_trend_change_pct"
-                    ),
-                },
-            )
-            delivery = send_telegram(format_alert(result), target="private" if ticker == "PTSN" else "all")
-            delivery_ok = bool(delivery.get("ok"))
-            _OBS.record_delivery(
-                channel="telegram",
-                status="success" if delivery_ok else "failed",
-                signal_event_id=signal_event_id,
-                destination="configured-telegram-targets",
-                metadata={
-                    "sent": delivery.get("sent", 0),
-                    "failed": delivery.get("failed", 0),
-                    "signal_type": result["phase"],
-                    "ticker": ticker,
-                },
-            )
-
-            if delivery_ok:
-                mark_alerted(result)
-                primary_alerted_tickers.add(ticker)
-                print(
-                    f"[ALERT] {ticker} "
-                    f"{result['phase']} {result['score']}"
-                )
-            else:
-                print(
-                    f"[WARN] Telegram gagal; state alert {ticker} "
-                    "tidak dinaikkan."
-                )
+            primary_alert_pool.append(result)
         else:
             mark_signal_present(ticker)
             print(
@@ -1372,10 +1421,142 @@ def run_once() -> None:
                 f"{result['phase']} {result['score']}"
             )
 
+    primary_ranked, primary_suppressed = rank_top_n_candidates(
+        primary_alert_pool,
+        FILTER1_TOP_N_ALERTS_PER_CYCLE,
+    )
+
+    for result in primary_suppressed:
+        ticker = result["ticker"]
+        evaluation_status[ticker] = "TOP_N_SUPPRESSED"
+        mark_signal_present(ticker)
+        _OBS.record_signal(
+            signal_type=result["phase"],
+            entity=ticker,
+            score=result.get("score"),
+            status="top_n_suppressed",
+            payload={
+                "quality_score": result.get("quality_score"),
+                "top_n_limit": FILTER1_TOP_N_ALERTS_PER_CYCLE,
+                "transaction_value_ma50": result.get(
+                    "transaction_value_ma50"
+                ),
+                "selling_absorption": result.get("selling_absorption"),
+                "aggression_trend": result.get("aggression_trend"),
+            },
+        )
+        print(
+            f"[TOP-N-SUPPRESSED] {ticker}: "
+            f"phase={result.get('phase')} "
+            f"quality={result.get('quality_score')} "
+            f"limit={FILTER1_TOP_N_ALERTS_PER_CYCLE}"
+        )
+
+    print(
+        f"[TOP-N] Filter 1 alertable={len(primary_alert_pool)} "
+        f"selected={len(primary_ranked)} "
+        f"limit={FILTER1_TOP_N_ALERTS_PER_CYCLE}"
+    )
+
+    for rank, result in enumerate(primary_ranked, start=1):
+        ticker = result["ticker"]
+        signal_event_id = _OBS.record_signal(
+            signal_type=result["phase"],
+            entity=ticker,
+            score=result.get("score"),
+            status="alert_candidate",
+            payload={
+                "price": result.get("price"),
+                "rank": rank,
+                "quality_score": result.get("quality_score"),
+                "quality_momentum_score": result.get(
+                    "quality_momentum_score"
+                ),
+                "quality_micro_score": result.get("quality_micro_score"),
+                "quality_tradeflow_score": result.get(
+                    "quality_tradeflow_score"
+                ),
+                "quality_liquidity_score": result.get(
+                    "quality_liquidity_score"
+                ),
+                "quality_foreign_score": result.get(
+                    "quality_foreign_score"
+                ),
+                "quality_structure_score": result.get(
+                    "quality_structure_score"
+                ),
+                "quality_risk_penalty": result.get(
+                    "quality_risk_penalty"
+                ),
+                "foreign_score": result.get("foreign_score"),
+                "foreign_status": result.get("foreign_status"),
+                "micro_score": result.get("micro_score"),
+                "selected_by": result.get("_selected_by"),
+                "daily_change_pct": result.get("daily_change_pct"),
+                "interval_return_pct": result.get("interval_return_pct"),
+                "shareholder_count": result.get("shareholder_count"),
+                "transaction_value_ma50": result.get(
+                    "transaction_value_ma50"
+                ),
+                "aggressive_buy_value": result.get(
+                    "aggressive_buy_value"
+                ),
+                "aggressive_sell_value": result.get(
+                    "aggressive_sell_value"
+                ),
+                "net_aggression_value": result.get(
+                    "net_aggression_value"
+                ),
+                "aggression_trend": result.get("aggression_trend"),
+                "aggression_trend_samples": result.get(
+                    "aggression_trend_samples"
+                ),
+                "aggression_trend_change_pct": result.get(
+                    "aggression_trend_change_pct"
+                ),
+                "selling_absorption": result.get(
+                    "selling_absorption"
+                ),
+            },
+        )
+        delivery = send_telegram(
+            format_alert(result, rank=rank),
+            target="private" if ticker == "PTSN" else "all",
+        )
+        delivery_ok = bool(delivery.get("ok"))
+        _OBS.record_delivery(
+            channel="telegram",
+            status="success" if delivery_ok else "failed",
+            signal_event_id=signal_event_id,
+            destination="configured-telegram-targets",
+            metadata={
+                "sent": delivery.get("sent", 0),
+                "failed": delivery.get("failed", 0),
+                "signal_type": result["phase"],
+                "ticker": ticker,
+                "rank": rank,
+                "quality_score": result.get("quality_score"),
+            },
+        )
+
+        if delivery_ok:
+            mark_alerted(result)
+            primary_alerted_tickers.add(ticker)
+            print(
+                f"[ALERT] #{rank} {ticker} "
+                f"{result['phase']} score={result['score']} "
+                f"quality={result.get('quality_score')}"
+            )
+        else:
+            print(
+                f"[WARN] Telegram gagal; state alert {ticker} "
+                "tidak dinaikkan."
+            )
+
     # Filter 2 has its own cooldown/state and never changes Filter 1 phase state.
     filter2_candidates = sorted(
         processed_filter2_fallback,
-        key=lambda x: float(x.get("score") or 0),
+        key=_quality_sort_key,
         reverse=True,
     )[:FILTER2_RESERVED_SLOTS]
 
