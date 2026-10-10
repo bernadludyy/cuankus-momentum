@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from pathlib import Path
+import tempfile
 
 from scanner.market_hours import WIB
 from project_fabric.data_gateway import market_policy
@@ -27,6 +29,7 @@ from main import (
 from scanner.tradeflow import classify_aggression_trend
 from scanner.quality import build_quality_metrics, classify_selling_absorption
 from scanner.engine import select_next_primary_phase
+import storage.db as db
 
 
 def test_zero_is_not_missing() -> None:
@@ -189,6 +192,53 @@ def test_quality_score_and_selling_absorption() -> None:
     quality = build_quality_metrics(result)
     assert quality["selling_absorption"] == "CONFIRMED"
     assert 70 <= quality["quality_score"] <= 100, quality
+
+
+def test_daily_filter_cache_roundtrip_includes_value_ma50() -> None:
+    original_path = db.DB_PATH
+    try:
+        with tempfile.TemporaryDirectory() as root:
+            db.DB_PATH = Path(root) / "bot4-v2.db"
+            db.init_db()
+            metrics = {
+                "volume_ma_short": 2_000_000,
+                "volume_ma_long": 800_000,
+                "volume_ma_ratio": 2.5,
+                "value_ma": 2_000_000_000,
+                "transaction_value_ma50": 7_500_000_000,
+                "history_days": 120,
+                "enough_history": True,
+                "swing_low": 90,
+                "swing_high": 120,
+                "swing_low_date": "2026-09-01",
+                "swing_high_date": "2026-09-20",
+                "golden_pocket_lower": 100,
+                "golden_pocket_upper": 102,
+                "golden_pocket_lookback": 20,
+                "swing_low_5d": 100,
+                "swing_high_5d": 120,
+                "swing_low_date_5d": "2026-10-01",
+                "swing_high_date_5d": "2026-10-05",
+                "golden_pocket_lower_5d": 108,
+                "golden_pocket_upper_5d": 110,
+                "golden_pocket_lookback_5d": 5,
+            }
+            db.save_daily_filter("TEST", metrics)
+            cached = db.get_cached_daily_filter("TEST", max_age_hours=1)
+            assert cached is not None
+            assert cached["transaction_value_ma50"] == 7_500_000_000
+
+            con = db.connect()
+            columns = {
+                row["name"]
+                for row in con.execute(
+                    "PRAGMA table_info(daily_filter_cache)"
+                ).fetchall()
+            }
+            con.close()
+            assert "transaction_value_ma50" in columns
+    finally:
+        db.DB_PATH = original_path
 
 
 def test_golden_pocket_from_recent_bullish_swing() -> None:
@@ -512,6 +562,7 @@ if __name__ == "__main__":
     test_tradeflow_replaces_golden_pocket_in_telegram()
     test_filter1_value_ma50_gate_and_top_n_ranking()
     test_quality_score_and_selling_absorption()
+    test_daily_filter_cache_roundtrip_includes_value_ma50()
     test_golden_pocket_from_recent_bullish_swing()
     test_filter2_relaxed_can_confirm_before_filter1()
     test_filter2_never_relaxes_falling_knife_gate()
