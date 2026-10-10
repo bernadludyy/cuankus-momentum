@@ -430,6 +430,10 @@ def get_daily_filter_metrics(ticker: str) -> dict:
     )
     if (
         cached is not None
+        and (
+            not FILTER1_VALUE_MA50_ENABLED
+            or cached.get("transaction_value_ma50") is not None
+        )
         and cached.get("golden_pocket_lookback") == 20
         and cached.get("golden_pocket_lookback_5d") == 5
         and cached.get("swing_low") not in (0, 0.0)
@@ -470,6 +474,9 @@ def prepare_daily_filter_candidate(result: dict) -> bool:
         result["volume_ma_long"] = metrics.get("volume_ma_long")
         result["volume_ma_ratio"] = metrics.get("volume_ma_ratio")
         result["value_ma"] = metrics.get("value_ma")
+        result["transaction_value_ma50"] = metrics.get(
+            "transaction_value_ma50"
+        )
         result["history_days"] = metrics.get("history_days")
         result["enough_history"] = metrics.get("enough_history")
         result["swing_low"] = metrics.get("swing_low")
@@ -507,6 +514,9 @@ def prepare_daily_filter_candidate(result: dict) -> bool:
             f"ValueMA{VALUE_MA_WINDOW}="
             f"{format_rupiah_compact(result.get('value_ma'))} "
             f"need>{format_rupiah_compact(MIN_VALUE_MA_IDR)}; "
+            f"ValueMA{FILTER1_VALUE_MA50_WINDOW}="
+            f"{format_rupiah_compact(result.get('transaction_value_ma50'))} "
+            f"need>={format_rupiah_compact(FILTER1_MIN_VALUE_MA50_IDR)}; "
             f"history={result.get('history_days', 0)}"
         )
 
@@ -531,7 +541,8 @@ def prepare_relaxed_daily_filter_candidate(result: dict) -> bool:
     if metrics:
         for key in (
             "volume_ma_short", "volume_ma_long", "volume_ma_ratio", "value_ma",
-            "history_days", "enough_history", "swing_low", "swing_high",
+            "transaction_value_ma50", "history_days", "enough_history",
+            "swing_low", "swing_high",
             "swing_low_date", "swing_high_date", "golden_pocket_lower",
             "golden_pocket_upper", "golden_pocket_lookback", "swing_low_5d",
             "swing_high_5d", "swing_low_date_5d", "swing_high_date_5d",
@@ -1169,6 +1180,9 @@ def run_once() -> None:
             {
                 "volume_ma_ratio": result.get("volume_ma_ratio"),
                 "value_ma": result.get("value_ma"),
+                "transaction_value_ma50": result.get(
+                    "transaction_value_ma50"
+                ),
                 "history_days": result.get("history_days"),
                 "enough_history": result.get("enough_history"),
             }
