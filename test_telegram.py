@@ -1,85 +1,63 @@
 from bot.notifier import send_telegram
-from main import format_alert, format_filter2_alert
+from main import format_alert
 
 
 sample_result = {
-    "phase": "POWERFUL_MOMENTUM",
-    "ticker": "FORMAT-TEST",
-    "price": 79.0,
-    "score": 83.8,
-    "leakage_score": 27.2,
-    "momentum_score": 83.8,
-    "ignition_score": 90.0,
-    "market_cap": 1_240_000_000_000,
-    "foreign_score": 27.0,
-    "foreign_status": "FORMAT PREVIEW",
-    "net_foreign_value": -490_985_000,
-    "net_foreign_ratio_pct": -5.81,
-    "foreign_buy_dominance_pct": 44.39,
-    "volume_ma_ratio": 2.67,
-    "value_ma": 10_610_000_000,
-    "transaction_value_ma50": 12_800_000_000,
-    "shareholder_count": None,
-    "swing_low_5d": 74.0,
-    "swing_high_5d": 81.0,
-    "swing_low_date_5d": "2026-10-01",
-    "swing_high_date_5d": "2026-10-05",
-    "golden_pocket_lower_5d": 76.45,
-    "golden_pocket_upper_5d": 76.67,
-    "golden_pocket_lookback_5d": 5,
-    "swing_low": 69.0,
-    "swing_high": 81.0,
-    "swing_low_date": "2026-09-29",
-    "swing_high_date": "2026-09-30",
-    "golden_pocket_lower": 73.20,
-    "golden_pocket_upper": 73.58,
-    "golden_pocket_lookback": 20,
-    "daily_change_pct": 5.33,
-    "interval_return_pct": 1.28,
-    "volume_spike": 12.97,
-    "value_spike": 1.0,
+    # Verified Filter 1 replay from Friday, 9 Oct 2026, 14:16 WIB.
+    "phase": "PRE_MOMENTUM",
+    "ticker": "SRSN",
+    "price": 139.0,
+    "score": 72.0,
+    "quality_score": None,  # V2 quality layer was not yet recorded on Friday.
+    "leakage_score": None,
+    "momentum_score": None,
+    "ignition_score": None,
+    "market_cap": 806_680_000_000,
+    "foreign_score": 0.0,
+    "foreign_status": "STRONG FOREIGN SELLING",
+    "net_foreign_value": None,
+    "net_foreign_ratio_pct": None,
+    "foreign_buy_dominance_pct": None,
+    "volume_ma_ratio": 2.2174,
+    "value_ma": 50_036_696_220,
+    "transaction_value_ma50": 31_567_262_634,
+    "daily_change_pct": 3.731343283582089,
+    "interval_return_pct": 1.4598540145985384,
+    "volume_spike": 5.046702813280848,
+    "value_spike": None,
     "frequency_spike": 1.0,
-    "breakout_pct": 1.28,
-    "micro_score": 95.0,
-    "aggressive_buy_ratio": 0.78,
-    "aggressive_buy_value": 2_100_000_000,
-    "aggressive_sell_value": 650_000_000,
-    "net_aggression_value": 1_450_000_000,
-    "aggression_trend": "RISING",
-    "selling_absorption": "CONFIRMED",
-    "quality_score": 89.4,
-    "bid_percent": 71.0,
+    "breakout_pct": None,
+    "micro_score": 60.0,
+    "aggressive_buy_ratio": 0.9223,
+    "aggressive_buy_value": None,
+    "aggressive_sell_value": None,
+    "net_aggression_value": None,
+    "aggression_trend": None,
+    "selling_absorption": "NONE",
+    "bid_percent": 36.0,
     "reasons": [
-        "FORMAT PREVIEW - bukan sinyal perdagangan",
-        "Validasi Golden Pocket Tactical 5D dan Structural 20D",
+        "REPLAY data Filter 1 Jumat 9 Oktober 2026 pukul 14:16 WIB",
+        "Tx Value MA50 dihitung dari stock-history 50 sesi yang tersimpan",
+        "Field Tradeflow V2 yang belum direkam pada Jumat ditampilkan sebagai '-'",
     ],
 }
 
-messages = [
-    (
-        "🧪 FORMAT PREVIEW BOT 4 — SCREENER 1 — BUKAN SINYAL\n\n"
-        + format_alert(sample_result, rank=1)
-    ),
-    (
-        "🧪 BOT 4 — FILTER 2 RELAXED LIVE — PREVIEW, BUKAN SINYAL\n\n"
-        + format_filter2_alert({**sample_result, "filter2_relaxed": True}, 1)
-    ),
-]
+message = (
+    "🧪 REPLAY BOT 4 FILTER 1 — DATA JUMAT 9 OKTOBER 2026\n"
+    "⚠️ BUKAN SINYAL LIVE / BUKAN ALERT BARU\n\n"
+    + format_alert(sample_result, lane="FILTER 1 — STRICT V2 REPLAY")
+)
 
-all_ok = True
-for index, message in enumerate(messages, start=1):
-    result = send_telegram(message)
-    print(f"TELEGRAM FORMAT PREVIEW {index} RESULT")
-    print(f"ok={result.get('ok')}")
-    print(f"sent={result.get('sent')}")
-    print(f"failed={result.get('failed')}")
+result = send_telegram(message, target="private")
+print("TELEGRAM FILTER 1 FRIDAY REPLAY RESULT")
+print(f"ok={result.get('ok')}")
+print(f"sent={result.get('sent')}")
+print(f"failed={result.get('failed')}")
 
-    if result.get("errors"):
-        print("ERRORS:")
-        for item in result["errors"]:
-            print(item["error"])
+if result.get("errors"):
+    print("ERRORS:")
+    for item in result["errors"]:
+        print(item["error"])
 
-    all_ok = all_ok and bool(result.get("ok"))
-
-if not all_ok:
+if not result.get("ok"):
     raise SystemExit(1)
