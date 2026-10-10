@@ -48,6 +48,23 @@ def _phase_rank(phase: str | None) -> int:
     return {name: i + 1 for i, name in enumerate(PRIMARY_STAGES)}.get(phase or "", 0)
 
 
+def _anchor_for_current_session(state: dict[str, Any] | None) -> str | None:
+    """Ignore yesterday's phase anchor so each IDX session can start fresh."""
+    if not state:
+        return None
+    anchor = state.get("anchor_phase")
+    last_seen = state.get("last_seen_ts")
+    if not anchor or not last_seen:
+        return anchor
+    try:
+        seen = datetime.fromisoformat(str(last_seen))
+        if seen.date() != datetime.now(seen.tzinfo).date():
+            return None
+    except (TypeError, ValueError):
+        return anchor
+    return anchor
+
+
 def select_next_primary_phase(
     result: dict[str, Any], state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -63,7 +80,7 @@ def select_next_primary_phase(
 
     if state is None:
         state = get_signal_state(str(result["ticker"]))
-    anchor = (state or {}).get("anchor_phase")
+    anchor = _anchor_for_current_session(state)
     none_since = (state or {}).get("none_since")
     if none_since:
         try:
@@ -113,7 +130,7 @@ def should_alert(result: dict[str, Any]) -> bool:
         return False
 
     state = get_signal_state(ticker)
-    if not state or not state.get("anchor_phase"):
+    if not state or not _anchor_for_current_session(state):
         return True
 
     none_since = state.get("none_since")
@@ -126,7 +143,7 @@ def should_alert(result: dict[str, Any]) -> bool:
         except Exception:
             pass
 
-    return _phase_rank(phase) > _phase_rank(state.get("anchor_phase"))
+    return _phase_rank(phase) > _phase_rank(_anchor_for_current_session(state))
 
 def mark_alerted(result: dict[str, Any]) -> None:
     save_alert(
