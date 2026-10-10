@@ -8,6 +8,8 @@ from config import (
     MIN_VALUE_MA_IDR,
     VALUE_MA_WINDOW,
     FILTER1_VALUE_MA50_WINDOW,
+    FILTER1_VALUE_MA50_ENABLED,
+    FILTER1_MIN_VALUE_MA50_IDR,
     VOLUME_MA_LONG,
     VOLUME_MA_RATIO_MIN,
     VOLUME_MA_SHORT,
@@ -255,11 +257,18 @@ def daily_filter_is_eligible(metrics: dict | None) -> bool:
 
     ratio = metrics.get("volume_ma_ratio")
     value_ma = metrics.get("value_ma")
+    value_ma50 = metrics.get("transaction_value_ma50")
 
     if ratio is None or value_ma is None:
+        return False
+    if FILTER1_VALUE_MA50_ENABLED and value_ma50 is None:
         return False
 
     return (
         float(ratio) >= VOLUME_MA_RATIO_MIN
         and float(value_ma) > MIN_VALUE_MA_IDR
+        and (
+            not FILTER1_VALUE_MA50_ENABLED
+            or float(value_ma50) >= FILTER1_MIN_VALUE_MA50_IDR
+        )
     )
