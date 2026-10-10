@@ -707,6 +707,20 @@ def enrich_result_with_quality(result: dict) -> dict:
     return {**result, **build_quality_metrics(result)}
 
 
+def _quality_sort_key(result: dict) -> tuple[float, float, int, str]:
+    phase_rank = {
+        "EARLY_IGNITION": 1,
+        "PRE_MOMENTUM": 2,
+        "POWERFUL_MOMENTUM": 3,
+    }.get(str(result.get("phase") or ""), 0)
+    return (
+        float(result.get("quality_score") or 0.0),
+        float(result.get("score") or 0.0),
+        phase_rank,
+        str(result.get("ticker") or ""),
+    )
+
+
 def _trend_label(value) -> str:
     return {
         "RISING": "RISING ↗",
@@ -1378,69 +1392,13 @@ def run_once() -> None:
 
     primary_alerted_tickers: set[str] = set()
 
+    # Lifecycle first, ranking second: same-phase repeats and downgrades never
+    # compete for Top-N. Only genuinely new setups or phase upgrades are ranked.
+    primary_alert_pool: list[dict] = []
     for result in eligible_candidates:
         ticker = result["ticker"]
-
         if should_alert(result):
-            signal_event_id = _OBS.record_signal(
-                signal_type=result["phase"],
-                entity=ticker,
-                score=result.get("score"),
-                status="alert_candidate",
-                payload={
-                    "price": result.get("price"),
-                    "foreign_score": result.get("foreign_score"),
-                    "foreign_status": result.get("foreign_status"),
-                    "micro_score": result.get("micro_score"),
-                    "selected_by": result.get("_selected_by"),
-                    "daily_change_pct": result.get("daily_change_pct"),
-                    "interval_return_pct": result.get("interval_return_pct"),
-                    "shareholder_count": result.get("shareholder_count"),
-                    "aggressive_buy_value": result.get(
-                        "aggressive_buy_value"
-                    ),
-                    "aggressive_sell_value": result.get(
-                        "aggressive_sell_value"
-                    ),
-                    "net_aggression_value": result.get(
-                        "net_aggression_value"
-                    ),
-                    "aggression_trend": result.get("aggression_trend"),
-                    "aggression_trend_samples": result.get(
-                        "aggression_trend_samples"
-                    ),
-                    "aggression_trend_change_pct": result.get(
-                        "aggression_trend_change_pct"
-                    ),
-                },
-            )
-            delivery = send_telegram(format_alert(result), target="private" if ticker == "PTSN" else "all")
-            delivery_ok = bool(delivery.get("ok"))
-            _OBS.record_delivery(
-                channel="telegram",
-                status="success" if delivery_ok else "failed",
-                signal_event_id=signal_event_id,
-                destination="configured-telegram-targets",
-                metadata={
-                    "sent": delivery.get("sent", 0),
-                    "failed": delivery.get("failed", 0),
-                    "signal_type": result["phase"],
-                    "ticker": ticker,
-                },
-            )
-
-            if delivery_ok:
-                mark_alerted(result)
-                primary_alerted_tickers.add(ticker)
-                print(
-                    f"[ALERT] {ticker} "
-                    f"{result['phase']} {result['score']}"
-                )
-            else:
-                print(
-                    f"[WARN] Telegram gagal; state alert {ticker} "
-                    "tidak dinaikkan."
-                )
+            primary_alert_pool.append(result)
         else:
             mark_signal_present(ticker)
             print(
@@ -1448,10 +1406,141 @@ def run_once() -> None:
                 f"{result['phase']} {result['score']}"
             )
 
+    primary_alert_pool.sort(key=_quality_sort_key, reverse=True)
+    primary_ranked = primary_alert_pool[:max(0, FILTER1_TOP_N_ALERTS_PER_CYCLE)]
+    primary_suppressed = primary_alert_pool[len(primary_ranked):]
+
+    for result in primary_suppressed:
+        ticker = result["ticker"]
+        evaluation_status[ticker] = "TOP_N_SUPPRESSED"
+        mark_signal_present(ticker)
+        _OBS.record_signal(
+            signal_type=result["phase"],
+            entity=ticker,
+            score=result.get("score"),
+            status="top_n_suppressed",
+            payload={
+                "quality_score": result.get("quality_score"),
+                "top_n_limit": FILTER1_TOP_N_ALERTS_PER_CYCLE,
+                "transaction_value_ma50": result.get(
+                    "transaction_value_ma50"
+                ),
+                "selling_absorption": result.get("selling_absorption"),
+                "aggression_trend": result.get("aggression_trend"),
+            },
+        )
+        print(
+            f"[TOP-N-SUPPRESSED] {ticker}: "
+            f"phase={result.get('phase')} "
+            f"quality={result.get('quality_score')} "
+            f"limit={FILTER1_TOP_N_ALERTS_PER_CYCLE}"
+        )
+
+    print(
+        f"[TOP-N] Filter 1 alertable={len(primary_alert_pool)} "
+        f"selected={len(primary_ranked)} "
+        f"limit={FILTER1_TOP_N_ALERTS_PER_CYCLE}"
+    )
+
+    for rank, result in enumerate(primary_ranked, start=1):
+        ticker = result["ticker"]
+        signal_event_id = _OBS.record_signal(
+            signal_type=result["phase"],
+            entity=ticker,
+            score=result.get("score"),
+            status="alert_candidate",
+            payload={
+                "price": result.get("price"),
+                "rank": rank,
+                "quality_score": result.get("quality_score"),
+                "quality_momentum_score": result.get(
+                    "quality_momentum_score"
+                ),
+                "quality_micro_score": result.get("quality_micro_score"),
+                "quality_tradeflow_score": result.get(
+                    "quality_tradeflow_score"
+                ),
+                "quality_liquidity_score": result.get(
+                    "quality_liquidity_score"
+                ),
+                "quality_foreign_score": result.get(
+                    "quality_foreign_score"
+                ),
+                "quality_structure_score": result.get(
+                    "quality_structure_score"
+                ),
+                "quality_risk_penalty": result.get(
+                    "quality_risk_penalty"
+                ),
+                "foreign_score": result.get("foreign_score"),
+                "foreign_status": result.get("foreign_status"),
+                "micro_score": result.get("micro_score"),
+                "selected_by": result.get("_selected_by"),
+                "daily_change_pct": result.get("daily_change_pct"),
+                "interval_return_pct": result.get("interval_return_pct"),
+                "shareholder_count": result.get("shareholder_count"),
+                "transaction_value_ma50": result.get(
+                    "transaction_value_ma50"
+                ),
+                "aggressive_buy_value": result.get(
+                    "aggressive_buy_value"
+                ),
+                "aggressive_sell_value": result.get(
+                    "aggressive_sell_value"
+                ),
+                "net_aggression_value": result.get(
+                    "net_aggression_value"
+                ),
+                "aggression_trend": result.get("aggression_trend"),
+                "aggression_trend_samples": result.get(
+                    "aggression_trend_samples"
+                ),
+                "aggression_trend_change_pct": result.get(
+                    "aggression_trend_change_pct"
+                ),
+                "selling_absorption": result.get(
+                    "selling_absorption"
+                ),
+            },
+        )
+        delivery = send_telegram(
+            format_alert(result, rank=rank),
+            target="private" if ticker == "PTSN" else "all",
+        )
+        delivery_ok = bool(delivery.get("ok"))
+        _OBS.record_delivery(
+            channel="telegram",
+            status="success" if delivery_ok else "failed",
+            signal_event_id=signal_event_id,
+            destination="configured-telegram-targets",
+            metadata={
+                "sent": delivery.get("sent", 0),
+                "failed": delivery.get("failed", 0),
+                "signal_type": result["phase"],
+                "ticker": ticker,
+                "rank": rank,
+                "quality_score": result.get("quality_score"),
+            },
+        )
+
+        if delivery_ok:
+            mark_alerted(result)
+            primary_alerted_tickers.add(ticker)
+            print(
+                f"[ALERT] #{rank} {ticker} "
+                f"{result['phase']} score={result['score']} "
+                f"quality={result.get('quality_score')}"
+            )
+        else:
+            print(
+                f"[WARN] Telegram gagal; state alert {ticker} "
+                "tidak dinaikkan."
+            )
+
     # Filter 2 has its own cooldown/state and never changes Filter 1 phase state.
     filter2_candidates = sorted(
         processed_filter2_fallback,
-        key=lambda x: float(x.get("score") or 0),
+        key=_quality_sort_key,
         reverse=True,
     )[:FILTER2_RESERVED_SLOTS]
 
