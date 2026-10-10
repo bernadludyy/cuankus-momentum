@@ -762,6 +762,12 @@ def format_alert(
     )
     rank_text = f" | TOP #{rank}" if rank is not None else ""
 
+    ma50_rule = (
+        f"(referensi F1 min {format_rupiah_compact(FILTER1_MIN_VALUE_MA50_IDR)})"
+        if result.get("filter2_relaxed")
+        else f"(min {format_rupiah_compact(FILTER1_MIN_VALUE_MA50_IDR)})"
+    )
+
     absorption = str(result.get("selling_absorption") or "NONE")
     absorption_icon = {
         "CONFIRMED": "✅",
@@ -789,7 +795,7 @@ def format_alert(
         "💧 LIKUIDITAS\n"
         f"• Tx Value MA50: "
         f"{format_rupiah_compact(result.get('transaction_value_ma50'))} "
-        f"(min {format_rupiah_compact(FILTER1_MIN_VALUE_MA50_IDR)})\n"
+        f"{ma50_rule}\n"
         f"• Value MA5: {format_rupiah_compact(result.get('value_ma'))}\n"
         f"• Vol MA10/MA100: {format_num(result.get('volume_ma_ratio'), 'x')}\n"
         f"• Market Cap: {format_market_cap(result.get('market_cap'))}\n\n"
