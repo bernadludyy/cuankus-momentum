@@ -31,6 +31,10 @@ from main import (
 )
 from scanner.tradeflow import classify_aggression_trend
 from scanner.quality import build_quality_metrics, classify_selling_absorption
+from scanner.liquidity_observer import (
+    dynamic_liquidity_threshold,
+    build_dynamic_liquidity_observation,
+)
 from scanner.engine import select_next_primary_phase
 import storage.db as db
 
@@ -168,6 +172,48 @@ def test_tradeflow_replaces_golden_pocket_in_telegram() -> None:
     assert "Tx Value MA50" in text
     assert "TOP #1" in text
     assert "GOLDEN POCKET" not in text
+
+
+def test_dynamic_liquidity_observer_is_tiered_and_observational() -> None:
+    assert dynamic_liquidity_threshold(300_000_000_000) == (
+        "SMALL_100B_500B",
+        1_000_000_000.0,
+    )
+    assert dynamic_liquidity_threshold(1_000_000_000_000) == (
+        "MID_500B_2T",
+        2_500_000_000.0,
+    )
+    assert dynamic_liquidity_threshold(5_000_000_000_000) == (
+        "LARGE_2T_10T",
+        5_000_000_000.0,
+    )
+
+    matched = build_dynamic_liquidity_observation(
+        {
+            "ticker": "TEST",
+            "market_cap": 400_000_000_000,
+            "transaction_value_ma50": 1_600_000_000,
+            "price": 120,
+            "score": 76,
+            "momentum_score": 74,
+            "volume_ma_ratio": 2.4,
+            "value_ma": 2_000_000_000,
+        },
+        lane="FILTER1_TEST",
+    )
+    assert matched is not None
+    assert matched["dynamic_threshold"] == 1_000_000_000.0
+    assert round(matched["ma50_to_market_cap_pct"], 3) == 0.4
+    assert matched["lane"] == "FILTER1_TEST"
+
+    rejected = build_dynamic_liquidity_observation(
+        {
+            "market_cap": 400_000_000_000,
+            "transaction_value_ma50": 900_000_000,
+        },
+        lane="FILTER1_TEST",
+    )
+    assert rejected is None
 
 
 def test_filter1_value_ma50_gate_and_top_n_ranking() -> None:
@@ -592,6 +638,7 @@ if __name__ == "__main__":
     test_rupiah_units_are_indonesian_and_directional_only_for_net()
     test_historical_alert_explains_missing_quality()
     test_tradeflow_replaces_golden_pocket_in_telegram()
+    test_dynamic_liquidity_observer_is_tiered_and_observational()
     test_filter1_value_ma50_gate_and_top_n_ranking()
     test_quality_score_and_selling_absorption()
     test_daily_filter_cache_roundtrip_includes_value_ma50()
