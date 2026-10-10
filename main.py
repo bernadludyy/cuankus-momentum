@@ -1137,7 +1137,10 @@ def run_once() -> None:
             result.get("price"),
         )
         primary_micro_results[ticker] = micro
-        result = select_next_primary_phase(apply_micro_confirmation(result, micro))
+        result = select_next_primary_phase(
+            apply_micro_confirmation(result, micro)
+        )
+        result = enrich_result_with_quality(result)
         processed_primary.append(result)
         primary_processed_by_ticker[ticker] = result
 
@@ -1147,7 +1150,8 @@ def run_once() -> None:
             f"buy={format_num((result.get('aggressive_buy_ratio') or 0) * 100, '%')} "
             f"bid={format_num(result.get('bid_percent'), '%')} "
             f"phase={result['phase']} "
-            f"score={result['score']}"
+            f"score={result['score']} "
+            f"quality={result.get('quality_score')}"
         )
 
         if result["phase"] == "NONE":
@@ -1291,6 +1295,7 @@ def run_once() -> None:
                 fallback_micro_results[ticker] = micro
 
             result = apply_relaxed_micro_confirmation(raw_result, micro)
+            result = enrich_result_with_quality(result)
             if result["phase"] == "NONE":
                 evaluation_status[ticker] = "NO_SIGNAL"
             else:
@@ -1302,6 +1307,7 @@ def run_once() -> None:
                 f"phase={result.get('phase')} "
                 f"score={result.get('score')} "
                 f"micro={result.get('micro_score')} "
+                f"quality={result.get('quality_score')} "
                 f"anti_knife={result.get('anti_falling_knife_relaxed_pass')}"
             )
     elif FILTER2_ENABLED:
