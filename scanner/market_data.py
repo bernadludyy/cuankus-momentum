@@ -5,6 +5,7 @@ import re
 
 from project_fabric.data_gateway import DataGateway, market_policy
 from project_fabric.universe_intelligence import publish_summary, publish_history
+from project_fabric.market_archive import MarketArchive
 
 from config import (
     ZPI_API_KEY,
@@ -19,6 +20,7 @@ from config import (
 
 _LAST_STOCK_SUMMARY_BY_TICKER: dict[str, dict[str, Any]] = {}
 _GATEWAY = DataGateway(service="cuankus-momentum")
+_ARCHIVE = MarketArchive(service="cuankus-momentum")
 
 
 def _headers() -> dict[str, str]:
@@ -181,6 +183,13 @@ def collect_shared_market_snapshot(length: int = 5000) -> Any:
     except Exception as exc:
         # Non-critical enrichment must never interrupt existing market scans.
         print(f"[UNIVERSE-INTELLIGENCE-WARN] summary: {type(exc).__name__}: {str(exc)[:160]}")
+    if _ARCHIVE.ready:
+        try:
+            count = _ARCHIVE.save_summary(payload)
+            if count:
+                print(f"[MARKET-ARCHIVE] completed stock-summary rows={count}")
+        except Exception as exc:
+            print(f"[MARKET-ARCHIVE-WARN] summary: {type(exc).__name__}")
     return payload
 
 
@@ -255,6 +264,13 @@ def fetch_stock_history(ticker: str, length: int = 120) -> Any:
             publish_history(_GATEWAY.cache, ticker, payload)
         except Exception as exc:
             print(f"[UNIVERSE-INTELLIGENCE-WARN] history {ticker}: {type(exc).__name__}: {str(exc)[:160]}")
+        if _ARCHIVE.ready:
+            try:
+                stored = _ARCHIVE.save_history(ticker, payload)
+                if stored:
+                    _ARCHIVE.compute_score(ticker)
+            except Exception as exc:
+                print(f"[MARKET-ARCHIVE-WARN] history {ticker}: {type(exc).__name__}")
     return payload
 
 
