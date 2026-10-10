@@ -144,6 +144,41 @@ VOLUME_MA_LONG = int(os.getenv("VOLUME_MA_LONG", "100"))
 VOLUME_MA_RATIO_MIN = float(os.getenv("VOLUME_MA_RATIO_MIN", "2.0"))
 VALUE_MA_WINDOW = int(os.getenv("VALUE_MA_WINDOW", "5"))
 MIN_VALUE_MA_IDR = float(os.getenv("MIN_VALUE_MA_IDR", "500000000"))
+
+# Bot 4 V2 Filter 1 liquidity quality gate. This uses the existing stock-history
+# payload, so it adds no extra ZAPI endpoint call. Filter 2 and the PTSN
+# structural lane intentionally do not hard-require this threshold.
+FILTER1_VALUE_MA50_ENABLED = os.getenv(
+    "FILTER1_VALUE_MA50_ENABLED", "true"
+).lower() in {"1", "true", "yes", "y"}
+FILTER1_VALUE_MA50_WINDOW = int(os.getenv("FILTER1_VALUE_MA50_WINDOW", "50"))
+FILTER1_MIN_VALUE_MA50_IDR = float(
+    os.getenv("FILTER1_MIN_VALUE_MA50_IDR", "5000000000")
+)
+
+# Final quality/ranking layer. Only new Filter 1 alerts/upgrades compete for
+# these slots; suppressed candidates remain observable and may rank later.
+FILTER1_TOP_N_ALERTS_PER_CYCLE = int(
+    os.getenv("FILTER1_TOP_N_ALERTS_PER_CYCLE", "3")
+)
+QUALITY_SCORE_ENABLED = os.getenv(
+    "QUALITY_SCORE_ENABLED", "true"
+).lower() in {"1", "true", "yes", "y"}
+
+# Selling absorption is a soft smart-money signal, not a hard entry gate.
+SELLING_ABSORPTION_MIN_SELL_VALUE_IDR = float(
+    os.getenv("SELLING_ABSORPTION_MIN_SELL_VALUE_IDR", "250000000")
+)
+SELLING_ABSORPTION_MIN_BID_PERCENT = float(
+    os.getenv("SELLING_ABSORPTION_MIN_BID_PERCENT", "55")
+)
+SELLING_ABSORPTION_MIN_POSITION_IN_RANGE = float(
+    os.getenv("SELLING_ABSORPTION_MIN_POSITION_IN_RANGE", "0.60")
+)
+SELLING_ABSORPTION_MIN_INTERVAL_RETURN_PCT = float(
+    os.getenv("SELLING_ABSORPTION_MIN_INTERVAL_RETURN_PCT", "-0.30")
+)
+
 DAILY_FILTER_CACHE_HOURS = int(os.getenv("DAILY_FILTER_CACHE_HOURS", "18"))
 STOCK_HISTORY_LENGTH = int(os.getenv("STOCK_HISTORY_LENGTH", "120"))
 SHAREHOLDER_FILTER_ENABLED = os.getenv("SHAREHOLDER_FILTER_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
