@@ -721,6 +721,15 @@ def _quality_sort_key(result: dict) -> tuple[float, float, int, str]:
     )
 
 
+def rank_top_n_candidates(
+    candidates: list[dict],
+    limit: int,
+) -> tuple[list[dict], list[dict]]:
+    ranked = sorted(candidates, key=_quality_sort_key, reverse=True)
+    safe_limit = max(0, int(limit))
+    return ranked[:safe_limit], ranked[safe_limit:]
+
+
 def _trend_label(value) -> str:
     return {
         "RISING": "RISING ↗",
@@ -1406,9 +1415,10 @@ def run_once() -> None:
                 f"{result['phase']} {result['score']}"
             )
 
-    primary_alert_pool.sort(key=_quality_sort_key, reverse=True)
-    primary_ranked = primary_alert_pool[:max(0, FILTER1_TOP_N_ALERTS_PER_CYCLE)]
-    primary_suppressed = primary_alert_pool[len(primary_ranked):]
+    primary_ranked, primary_suppressed = rank_top_n_candidates(
+        primary_alert_pool,
+        FILTER1_TOP_N_ALERTS_PER_CYCLE,
+    )
 
     for result in primary_suppressed:
         ticker = result["ticker"]
