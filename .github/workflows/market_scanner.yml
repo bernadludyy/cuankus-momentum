@@ -68,6 +68,9 @@ jobs:
           VOLUME_MA_RATIO_MIN: "2.0"
           VALUE_MA_WINDOW: "5"
           MIN_VALUE_MA_IDR: "500000000"
+          FILTER1_VALUE_MA50_ENABLED: "true"
+          FILTER1_VALUE_MA50_WINDOW: "50"
+          FILTER1_MIN_VALUE_MA50_IDR: "5000000000"
         run: python test_daily_filter.py
 
       - name: Shareholder filter smoke test
@@ -158,6 +161,15 @@ jobs:
           VOLUME_MA_RATIO_MIN: "2.0"
           VALUE_MA_WINDOW: "5"
           MIN_VALUE_MA_IDR: "500000000"
+          FILTER1_VALUE_MA50_ENABLED: "true"
+          FILTER1_VALUE_MA50_WINDOW: "50"
+          FILTER1_MIN_VALUE_MA50_IDR: "5000000000"
+          FILTER1_TOP_N_ALERTS_PER_CYCLE: "3"
+          QUALITY_SCORE_ENABLED: "true"
+          SELLING_ABSORPTION_MIN_SELL_VALUE_IDR: "250000000"
+          SELLING_ABSORPTION_MIN_BID_PERCENT: "55"
+          SELLING_ABSORPTION_MIN_POSITION_IN_RANGE: "0.60"
+          SELLING_ABSORPTION_MIN_INTERVAL_RETURN_PCT: "-0.30"
           DAILY_FILTER_CACHE_HOURS: "18"
           STOCK_HISTORY_LENGTH: "120"
           SHAREHOLDER_FILTER_ENABLED: "false"
