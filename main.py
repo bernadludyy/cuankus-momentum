@@ -681,6 +681,15 @@ def enrich_micro_with_tradeflow(
     return output
 
 
+def enrich_result_with_quality(result: dict) -> dict:
+    """Attach Bot 4 V2 soft quality metrics after microstructure confirmation."""
+    if not QUALITY_SCORE_ENABLED:
+        output = dict(result)
+        output.setdefault("quality_score", float(result.get("score") or 0.0))
+        return output
+    return {**result, **build_quality_metrics(result)}
+
+
 def format_alert(result: dict) -> str:
     if result["phase"] == "EARLY_IGNITION":
         icon = "🔵"
