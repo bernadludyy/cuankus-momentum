@@ -9,7 +9,7 @@ from scanner.ptsn_structure import build_ptsn_structure, format_ptsn_structure
 from bot import notifier
 from main import load_universe
 from scanner.foreign_score import build_foreign_metrics
-from scanner.daily_filters import compute_daily_filter_metrics
+from scanner.daily_filters import compute_daily_filter_metrics, daily_filter_is_eligible
 from scanner.microstructure import (
     _gte as micro_gte,
     _trade_age_minutes,
@@ -19,8 +19,13 @@ from scanner.microstructure import (
     relaxed_anti_falling_knife_pass,
 )
 from scanner.scoring import _gte as scoring_gte
-from main import should_run_filter2_fallback, format_alert
+from main import (
+    should_run_filter2_fallback,
+    format_alert,
+    rank_top_n_candidates,
+)
 from scanner.tradeflow import classify_aggression_trend
+from scanner.quality import build_quality_metrics, classify_selling_absorption
 from scanner.engine import select_next_primary_phase
 
 
@@ -102,24 +107,88 @@ def test_tradeflow_aggressive_values_and_trend() -> None:
     assert falling["aggression_trend"] == "FALLING", falling
 
 
-def test_tradeflow_not_in_telegram_yet() -> None:
+def test_tradeflow_replaces_golden_pocket_in_telegram() -> None:
     text = format_alert(
         {
             "phase": "PRE_MOMENTUM",
             "ticker": "TEST",
             "price": 100,
             "score": 70,
+            "quality_score": 78,
             "leakage_score": 60,
             "momentum_score": 70,
+            "ignition_score": 65,
             "aggressive_buy_value": 2_000_000_000,
             "aggressive_sell_value": 500_000_000,
             "net_aggression_value": 1_500_000_000,
             "aggression_trend": "RISING",
-        }
+            "selling_absorption": "CONFIRMED",
+            "transaction_value_ma50": 8_000_000_000,
+            "anti_falling_knife_pass": True,
+            "not_overextended": True,
+        },
+        rank=1,
     )
-    assert "Net Aggression" not in text
-    assert "Aggression Trend" not in text
-    assert "Aggressive Buy Value" not in text
+    assert "Net Aggression" in text
+    assert "Aggression Trend" in text
+    assert "Selling Absorption" in text
+    assert "Tx Value MA50" in text
+    assert "TOP #1" in text
+    assert "GOLDEN POCKET" not in text
+
+
+def test_filter1_value_ma50_gate_and_top_n_ranking() -> None:
+    eligible = {
+        "enough_history": True,
+        "volume_ma_ratio": 2.2,
+        "value_ma": 1_000_000_000,
+        "transaction_value_ma50": 6_000_000_000,
+    }
+    assert daily_filter_is_eligible(eligible)
+
+    too_illiquid = dict(eligible)
+    too_illiquid["transaction_value_ma50"] = 4_900_000_000
+    assert not daily_filter_is_eligible(too_illiquid)
+
+    selected, suppressed = rank_top_n_candidates(
+        [
+            {"ticker": "A", "quality_score": 81, "score": 90, "phase": "PRE_MOMENTUM"},
+            {"ticker": "B", "quality_score": 93, "score": 80, "phase": "EARLY_IGNITION"},
+            {"ticker": "C", "quality_score": 88, "score": 85, "phase": "POWERFUL_MOMENTUM"},
+            {"ticker": "D", "quality_score": 70, "score": 95, "phase": "POWERFUL_MOMENTUM"},
+        ],
+        3,
+    )
+    assert [item["ticker"] for item in selected] == ["B", "C", "A"]
+    assert [item["ticker"] for item in suppressed] == ["D"]
+
+
+def test_quality_score_and_selling_absorption() -> None:
+    result = {
+        "score": 85,
+        "micro_score": 82,
+        "aggressive_buy_ratio": 0.62,
+        "aggressive_buy_value": 1_800_000_000,
+        "aggressive_sell_value": 700_000_000,
+        "net_aggression_value": 1_100_000_000,
+        "aggression_trend": "RISING",
+        "bid_percent": 63,
+        "interval_return_pct": 0.05,
+        "position_in_range": 0.78,
+        "breakout_pct": 0.65,
+        "daily_change_pct": 1.8,
+        "anti_falling_knife_pass": True,
+        "not_overextended": True,
+        "transaction_value_ma50": 12_000_000_000,
+        "volume_ma_ratio": 2.8,
+        "foreign_score": 72,
+    }
+    absorption = classify_selling_absorption(result)
+    assert absorption["selling_absorption"] == "CONFIRMED", absorption
+
+    quality = build_quality_metrics(result)
+    assert quality["selling_absorption"] == "CONFIRMED"
+    assert 70 <= quality["quality_score"] <= 100, quality
 
 
 def test_golden_pocket_from_recent_bullish_swing() -> None:
@@ -301,6 +370,21 @@ def test_filter1_staged_alert_order() -> None:
     assert done["phase"] == "POWERFUL_MOMENTUM", done
 
 
+def test_filter1_lifecycle_resets_on_new_trading_day() -> None:
+    candidate, micro = _multi_stage_candidate()
+    result = apply_micro_confirmation(candidate, micro)
+    yesterday = (datetime.now(WIB) - timedelta(days=1)).isoformat()
+    selected = select_next_primary_phase(
+        result,
+        state={
+            "anchor_phase": "POWERFUL_MOMENTUM",
+            "none_since": None,
+            "last_seen_ts": yesterday,
+        },
+    )
+    assert selected["phase"] == "EARLY_IGNITION", selected
+
+
 def test_filter1_never_skips_intermediate_stage_or_fakes_ignition() -> None:
     candidate, micro = _multi_stage_candidate()
     candidate["daily_change_pct"] = 6.0  # Ignition window already missed.
@@ -420,11 +504,14 @@ if __name__ == "__main__":
     test_ptsn_added_to_static_watchlist()
     test_phase_hierarchy_prefers_pre_momentum_over_leakage()
     test_filter1_staged_alert_order()
+    test_filter1_lifecycle_resets_on_new_trading_day()
     test_filter1_never_skips_intermediate_stage_or_fakes_ignition()
     test_filter1_leakage_is_context_not_a_separate_telegram_stage()
     test_trade_age_parser()
     test_tradeflow_aggressive_values_and_trend()
-    test_tradeflow_not_in_telegram_yet()
+    test_tradeflow_replaces_golden_pocket_in_telegram()
+    test_filter1_value_ma50_gate_and_top_n_ranking()
+    test_quality_score_and_selling_absorption()
     test_golden_pocket_from_recent_bullish_swing()
     test_filter2_relaxed_can_confirm_before_filter1()
     test_filter2_never_relaxes_falling_knife_gate()
