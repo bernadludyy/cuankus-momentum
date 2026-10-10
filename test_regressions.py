@@ -24,6 +24,9 @@ from scanner.scoring import _gte as scoring_gte
 from main import (
     should_run_filter2_fallback,
     format_alert,
+    format_market_cap,
+    format_rupiah_compact,
+    format_rupiah_signed,
     rank_top_n_candidates,
 )
 from scanner.tradeflow import classify_aggression_trend
@@ -108,6 +111,33 @@ def test_tradeflow_aggressive_values_and_trend() -> None:
         flat_tolerance_pct=5,
     )
     assert falling["aggression_trend"] == "FALLING", falling
+
+
+def test_rupiah_units_are_indonesian_and_directional_only_for_net() -> None:
+    assert format_market_cap(806_680_000_000) == "Rp 806,68 Miliar"
+    assert format_market_cap(1_240_000_000_000) == "Rp 1,24 Triliun"
+    assert format_rupiah_compact(31_567_262_634) == "Rp 31,57 Miliar"
+    assert format_rupiah_compact(50_036_696_220) == "Rp 50,04 Miliar"
+    assert format_rupiah_signed(16_377_130_000) == "Rp +16,38 Miliar"
+    assert format_rupiah_signed(-490_985_000) == "Rp -490,99 Juta"
+
+
+def test_historical_alert_explains_missing_quality() -> None:
+    text = format_alert(
+        {
+            "phase": "PRE_MOMENTUM",
+            "ticker": "HIST",
+            "price": 100,
+            "score": 72,
+            "quality_score": None,
+            "transaction_value_ma50": 8_000_000_000,
+            "value_ma": 10_000_000_000,
+            "market_cap": 806_680_000_000,
+        }
+    )
+    assert "Quality: N/A (data historis pre-V2)" in text
+    assert "Market Cap: Rp 806,68 Miliar" in text
+    assert "Tx Value MA50: Rp 8,00 Miliar" in text
 
 
 def test_tradeflow_replaces_golden_pocket_in_telegram() -> None:
@@ -559,6 +589,8 @@ if __name__ == "__main__":
     test_filter1_leakage_is_context_not_a_separate_telegram_stage()
     test_trade_age_parser()
     test_tradeflow_aggressive_values_and_trend()
+    test_rupiah_units_are_indonesian_and_directional_only_for_net()
+    test_historical_alert_explains_missing_quality()
     test_tradeflow_replaces_golden_pocket_in_telegram()
     test_filter1_value_ma50_gate_and_top_n_ranking()
     test_quality_score_and_selling_absorption()
