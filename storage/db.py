@@ -1090,7 +1090,7 @@ def ensure_reversal_watch(
     con = connect()
     cur = con.execute(
         """
-        INSERT OR IGNORE INTO reversal_watches (
+        INSERT INTO reversal_watches (
             ticker, source_lane, source_phase, target,
             alert_ts, alert_price, pullback_lower, pullback_upper,
             reversal_trigger, invalidation_price, state,
@@ -1103,6 +1103,31 @@ def ensure_reversal_watch(
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'WAIT_PULLBACK',
             NULL, NULL, ?, 0, 0, 0, 0, 0, NULL, NULL, ?, NULL, NULL
         )
+        ON CONFLICT(ticker) DO UPDATE SET
+            source_lane = excluded.source_lane,
+            source_phase = excluded.source_phase,
+            target = excluded.target,
+            alert_ts = excluded.alert_ts,
+            alert_price = excluded.alert_price,
+            pullback_lower = excluded.pullback_lower,
+            pullback_upper = excluded.pullback_upper,
+            reversal_trigger = excluded.reversal_trigger,
+            invalidation_price = excluded.invalidation_price,
+            state = 'WAIT_PULLBACK',
+            touch_ts = NULL,
+            low_seen = NULL,
+            last_price = excluded.last_price,
+            cumulative_buy_value = 0,
+            cumulative_sell_value = 0,
+            cumulative_buy_lots = 0,
+            cumulative_sell_lots = 0,
+            new_trade_count = 0,
+            last_delta_value = NULL,
+            last_score = NULL,
+            last_eval_ts = excluded.last_eval_ts,
+            confirmed_ts = NULL,
+            cancelled_ts = NULL
+        WHERE reversal_watches.alert_ts < excluded.alert_ts
         """,
         (
             ticker.upper(),
