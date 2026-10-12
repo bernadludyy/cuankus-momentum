@@ -165,6 +165,19 @@ QUALITY_SCORE_ENABLED = os.getenv(
     "QUALITY_SCORE_ENABLED", "true"
 ).lower() in {"1", "true", "yes", "y"}
 
+# Post-alert entry guidance. This changes Telegram messaging only; it does not
+# alter Filter 1/2 eligibility, ranking, or execute orders.
+ENTRY_SETUP_ENABLED = os.getenv(
+    "ENTRY_SETUP_ENABLED", "true"
+).lower() in {"1", "true", "yes", "y"}
+ENTRY_PULLBACK_TICKS = int(os.getenv("ENTRY_PULLBACK_TICKS", "2"))
+ENTRY_MIN_AGGRESSIVE_BUY_RATIO = float(
+    os.getenv("ENTRY_MIN_AGGRESSIVE_BUY_RATIO", "0.55")
+)
+ENTRY_MIN_BID_PERCENT = float(
+    os.getenv("ENTRY_MIN_BID_PERCENT", "50")
+)
+
 # Selling absorption is a soft smart-money signal, not a hard entry gate.
 SELLING_ABSORPTION_MIN_SELL_VALUE_IDR = float(
     os.getenv("SELLING_ABSORPTION_MIN_SELL_VALUE_IDR", "250000000")
