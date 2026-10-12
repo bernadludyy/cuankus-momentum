@@ -432,13 +432,12 @@ def evaluate_live_reversal_watch(
         batch=batch,
     )
 
+    # Keep confirmed candidates active until Telegram delivery succeeds.
+    # The caller marks CONFIRMED only after a successful notification, so a
+    # transient Telegram failure can retry on the next scanner cycle.
     update_reversal_watch(
         ticker,
-        state=(
-            "CONFIRMED"
-            if scored["status"] == "ENTRY_CONFIRMED"
-            else "PULLBACK_ACTIVE"
-        ),
+        state="PULLBACK_ACTIVE",
         low_seen=scored["low_seen"],
         last_price=current_price,
         cumulative_buy_value=scored["cumulative_buy_value"],
@@ -449,7 +448,6 @@ def evaluate_live_reversal_watch(
         last_delta_value=scored["batch_delta"],
         last_score=scored["score"],
         last_eval_ts=now,
-        confirmed_ts=now if scored["status"] == "ENTRY_CONFIRMED" else None,
     )
 
     return {
