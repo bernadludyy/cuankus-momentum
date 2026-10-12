@@ -33,15 +33,17 @@ def make_history(start: str = "2026-08-20", count: int = 35) -> dict:
                 "Value": 10_000_000 + len(rows) * 100_000,
             }
         )
-    # Guarantee enough rows for feature computation.
+    # Guarantee enough rows for feature computation and always advance
+    # the calendar cursor across weekends.
+    cursor = datetime.fromisoformat(rows[-1]["Date"])
     while len(rows) < 35:
-        last = datetime.fromisoformat(rows[-1]["Date"]) + timedelta(days=1)
-        if last.weekday() >= 5:
+        cursor += timedelta(days=1)
+        if cursor.weekday() >= 5:
             continue
         price = 100 + len(rows) * 0.5
         rows.append(
             {
-                "Date": last.date().isoformat(),
+                "Date": cursor.date().isoformat(),
                 "Open": price - 0.5,
                 "High": price + 1.0,
                 "Low": price - 1.0,
