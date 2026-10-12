@@ -131,6 +131,68 @@ def init_db() -> None:
 
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS reversal_watches (
+            ticker TEXT PRIMARY KEY,
+            source_lane TEXT NOT NULL,
+            source_phase TEXT,
+            target TEXT NOT NULL DEFAULT 'all',
+            alert_ts TEXT NOT NULL,
+            alert_price REAL NOT NULL,
+            pullback_lower REAL NOT NULL,
+            pullback_upper REAL NOT NULL,
+            reversal_trigger REAL NOT NULL,
+            invalidation_price REAL NOT NULL,
+            state TEXT NOT NULL,
+            touch_ts TEXT,
+            low_seen REAL,
+            last_price REAL,
+            cumulative_buy_value REAL NOT NULL DEFAULT 0,
+            cumulative_sell_value REAL NOT NULL DEFAULT 0,
+            cumulative_buy_lots REAL NOT NULL DEFAULT 0,
+            cumulative_sell_lots REAL NOT NULL DEFAULT 0,
+            new_trade_count INTEGER NOT NULL DEFAULT 0,
+            last_delta_value REAL,
+            last_score REAL,
+            last_eval_ts TEXT,
+            confirmed_ts TEXT,
+            cancelled_ts TEXT
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_reversal_watches_state_ts
+        ON reversal_watches(state, alert_ts)
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reversal_trade_fingerprints (
+            ticker TEXT NOT NULL,
+            trade_day TEXT NOT NULL,
+            trade_key TEXT NOT NULL,
+            trade_ts TEXT,
+            action TEXT,
+            price REAL,
+            lots REAL,
+            trade_value REAL,
+            seen_at TEXT NOT NULL,
+            PRIMARY KEY (ticker, trade_day, trade_key)
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_reversal_trade_seen
+        ON reversal_trade_fingerprints(ticker, seen_at)
+        """
+    )
+
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS market_cap_cache (
             ticker TEXT PRIMARY KEY,
             market_cap REAL NOT NULL,
@@ -228,6 +290,12 @@ def init_db() -> None:
             ON latest.ticker = a.ticker
            AND latest.max_id = a.id
         """
+    )
+
+    cutoff_day = (datetime.now(WIB) - timedelta(days=2)).date().isoformat()
+    cur.execute(
+        "DELETE FROM reversal_trade_fingerprints WHERE trade_day < ?",
+        (cutoff_day,),
     )
 
     con.commit()
@@ -827,3 +895,299 @@ def save_shareholder_filter(
     )
     con.commit()
     con.close()
+
+
+
+def upsert_reversal_watch(
+    *,
+    ticker: str,
+    source_lane: str,
+    source_phase: str | None,
+    target: str,
+    alert_price: float,
+    pullback_lower: float,
+    pullback_upper: float,
+    reversal_trigger: float,
+    invalidation_price: float,
+    alert_ts: str | None = None,
+) -> None:
+    now = alert_ts or now_wib_iso()
+    con = connect()
+    con.execute(
+        """
+        INSERT INTO reversal_watches (
+            ticker, source_lane, source_phase, target,
+            alert_ts, alert_price, pullback_lower, pullback_upper,
+            reversal_trigger, invalidation_price, state,
+            touch_ts, low_seen, last_price,
+            cumulative_buy_value, cumulative_sell_value,
+            cumulative_buy_lots, cumulative_sell_lots,
+            new_trade_count, last_delta_value, last_score,
+            last_eval_ts, confirmed_ts, cancelled_ts
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'WAIT_PULLBACK',
+            NULL, NULL, ?, 0, 0, 0, 0, 0, NULL, NULL, ?, NULL, NULL
+        )
+        ON CONFLICT(ticker) DO UPDATE SET
+            source_lane = excluded.source_lane,
+            source_phase = excluded.source_phase,
+            target = excluded.target,
+            alert_ts = excluded.alert_ts,
+            alert_price = excluded.alert_price,
+            pullback_lower = excluded.pullback_lower,
+            pullback_upper = excluded.pullback_upper,
+            reversal_trigger = excluded.reversal_trigger,
+            invalidation_price = excluded.invalidation_price,
+            state = 'WAIT_PULLBACK',
+            touch_ts = NULL,
+            low_seen = NULL,
+            last_price = excluded.last_price,
+            cumulative_buy_value = 0,
+            cumulative_sell_value = 0,
+            cumulative_buy_lots = 0,
+            cumulative_sell_lots = 0,
+            new_trade_count = 0,
+            last_delta_value = NULL,
+            last_score = NULL,
+            last_eval_ts = excluded.last_eval_ts,
+            confirmed_ts = NULL,
+            cancelled_ts = NULL
+        """,
+        (
+            ticker.upper(),
+            str(source_lane),
+            source_phase,
+            str(target),
+            now,
+            float(alert_price),
+            float(pullback_lower),
+            float(pullback_upper),
+            float(reversal_trigger),
+            float(invalidation_price),
+            float(alert_price),
+            now,
+        ),
+    )
+    con.commit()
+    con.close()
+
+
+def get_active_reversal_watches(
+    *,
+    max_age_minutes: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    cutoff = datetime.now(WIB) - timedelta(minutes=max(1, int(max_age_minutes)))
+    today = datetime.now(WIB).date().isoformat()
+    con = connect()
+    rows = con.execute(
+        """
+        SELECT *
+        FROM reversal_watches
+        WHERE state IN ('WAIT_PULLBACK', 'PULLBACK_ACTIVE')
+          AND substr(alert_ts, 1, 10) = ?
+          AND alert_ts >= ?
+        ORDER BY alert_ts DESC
+        LIMIT ?
+        """,
+        (today, cutoff.isoformat(timespec="seconds"), max(1, int(limit))),
+    ).fetchall()
+    con.close()
+    return [dict(row) for row in rows]
+
+
+def update_reversal_watch(
+    ticker: str,
+    **fields: Any,
+) -> None:
+    allowed = {
+        "state", "touch_ts", "low_seen", "last_price",
+        "cumulative_buy_value", "cumulative_sell_value",
+        "cumulative_buy_lots", "cumulative_sell_lots",
+        "new_trade_count", "last_delta_value", "last_score",
+        "last_eval_ts", "confirmed_ts", "cancelled_ts",
+    }
+    updates = [(key, value) for key, value in fields.items() if key in allowed]
+    if not updates:
+        return
+    sql = ", ".join(f"{key} = ?" for key, _ in updates)
+    params = [value for _, value in updates] + [ticker.upper()]
+    con = connect()
+    con.execute(
+        f"UPDATE reversal_watches SET {sql} WHERE ticker = ?",
+        params,
+    )
+    con.commit()
+    con.close()
+
+
+def get_snapshots_since(ticker: str, since_ts: str) -> list[dict[str, Any]]:
+    con = connect()
+    rows = con.execute(
+        """
+        SELECT *
+        FROM snapshots
+        WHERE ticker = ? AND ts >= ?
+        ORDER BY ts ASC
+        """,
+        (ticker.upper(), str(since_ts)),
+    ).fetchall()
+    con.close()
+    return [dict(row) for row in rows]
+
+
+def save_reversal_trade_if_new(
+    *,
+    ticker: str,
+    trade_day: str,
+    trade_key: str,
+    trade_ts: str | None,
+    action: str | None,
+    price: float | None,
+    lots: float | None,
+    trade_value: float | None,
+) -> bool:
+    con = connect()
+    cur = con.execute(
+        """
+        INSERT OR IGNORE INTO reversal_trade_fingerprints (
+            ticker, trade_day, trade_key, trade_ts, action,
+            price, lots, trade_value, seen_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ticker.upper(),
+            str(trade_day),
+            str(trade_key),
+            trade_ts,
+            action,
+            price,
+            lots,
+            trade_value,
+            now_wib_iso(),
+        ),
+    )
+    inserted = cur.rowcount > 0
+    con.commit()
+    con.close()
+    return inserted
+
+
+
+def ensure_reversal_watch(
+    *,
+    ticker: str,
+    source_lane: str,
+    source_phase: str | None,
+    target: str,
+    alert_price: float,
+    pullback_lower: float,
+    pullback_upper: float,
+    reversal_trigger: float,
+    invalidation_price: float,
+    alert_ts: str,
+) -> bool:
+    con = connect()
+    cur = con.execute(
+        """
+        INSERT INTO reversal_watches (
+            ticker, source_lane, source_phase, target,
+            alert_ts, alert_price, pullback_lower, pullback_upper,
+            reversal_trigger, invalidation_price, state,
+            touch_ts, low_seen, last_price,
+            cumulative_buy_value, cumulative_sell_value,
+            cumulative_buy_lots, cumulative_sell_lots,
+            new_trade_count, last_delta_value, last_score,
+            last_eval_ts, confirmed_ts, cancelled_ts
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'WAIT_PULLBACK',
+            NULL, NULL, ?, 0, 0, 0, 0, 0, NULL, NULL, ?, NULL, NULL
+        )
+        ON CONFLICT(ticker) DO UPDATE SET
+            source_lane = excluded.source_lane,
+            source_phase = excluded.source_phase,
+            target = excluded.target,
+            alert_ts = excluded.alert_ts,
+            alert_price = excluded.alert_price,
+            pullback_lower = excluded.pullback_lower,
+            pullback_upper = excluded.pullback_upper,
+            reversal_trigger = excluded.reversal_trigger,
+            invalidation_price = excluded.invalidation_price,
+            state = 'WAIT_PULLBACK',
+            touch_ts = NULL,
+            low_seen = NULL,
+            last_price = excluded.last_price,
+            cumulative_buy_value = 0,
+            cumulative_sell_value = 0,
+            cumulative_buy_lots = 0,
+            cumulative_sell_lots = 0,
+            new_trade_count = 0,
+            last_delta_value = NULL,
+            last_score = NULL,
+            last_eval_ts = excluded.last_eval_ts,
+            confirmed_ts = NULL,
+            cancelled_ts = NULL
+        WHERE reversal_watches.alert_ts < excluded.alert_ts
+        """,
+        (
+            ticker.upper(),
+            str(source_lane),
+            source_phase,
+            str(target),
+            str(alert_ts),
+            float(alert_price),
+            float(pullback_lower),
+            float(pullback_upper),
+            float(reversal_trigger),
+            float(invalidation_price),
+            float(alert_price),
+            now_wib_iso(),
+        ),
+    )
+    inserted = cur.rowcount > 0
+    con.commit()
+    con.close()
+    return inserted
+
+
+def get_recent_alert_seeds(
+    *,
+    max_age_minutes: int,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    cutoff = datetime.now(WIB) - timedelta(minutes=max(1, int(max_age_minutes)))
+    today = datetime.now(WIB).date().isoformat()
+    con = connect()
+    rows = con.execute(
+        """
+        SELECT ticker, ts, phase, price, 'FILTER1' AS lane
+        FROM alerts
+        WHERE ts >= ? AND substr(ts, 1, 10) = ?
+        UNION ALL
+        SELECT ticker, ts, NULL AS phase, price, 'FILTER2' AS lane
+        FROM screener_alerts
+        WHERE screener = 'FILTER2_RELAXED_MOMENTUM'
+          AND ts >= ? AND substr(ts, 1, 10) = ?
+        ORDER BY ts DESC
+        LIMIT ?
+        """,
+        (
+            cutoff.isoformat(timespec="seconds"),
+            today,
+            cutoff.isoformat(timespec="seconds"),
+            today,
+            max(1, int(limit)),
+        ),
+    ).fetchall()
+    con.close()
+
+    seen: set[str] = set()
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        ticker = str(item["ticker"]).upper()
+        if ticker in seen or item.get("price") is None:
+            continue
+        seen.add(ticker)
+        output.append(item)
+    return output
