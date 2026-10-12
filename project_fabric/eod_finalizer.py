@@ -1,0 +1,369 @@
+"""17:00 WIB cache-only EOD finalizer for Universe Intelligence.
+
+The scanner intentionally excludes today's partial candle intraday. After the IDX
+session is closed, this job combines the latest cached stock-summary OHLCV row
+with already-cached stock-history, recalculates Universe Intelligence, and writes
+the result back to the shared Neon cache. It never calls ZAPI.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+import os
+from typing import Any
+
+try:
+    import psycopg
+except ImportError:  # pragma: no cover
+    psycopg = None
+
+from .postgres_backend import PostgresTTLCache, configured_database_url
+from .universe_intelligence import (
+    HISTORY_ENDPOINT,
+    SUMMARY_ENDPOINT,
+    SUMMARY_PARAMS,
+    _cache_key,
+    history_features,
+    summary_snapshot,
+)
+
+
+WIB = timezone(timedelta(hours=7))
+NAMESPACE = os.getenv("PROJECT_FABRIC_CACHE_NAMESPACE", "shared-v1").strip() or "shared-v1"
+EOD_STATUS_ENDPOINT = "universe:intelligence:eod-status:v1"
+EOD_STATUS_PARAMS = {"scope": "IDX"}
+
+
+def _number(row: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = row.get(key)
+        if value in (None, "") or isinstance(value, bool):
+            continue
+        try:
+            return float(str(value).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _ticker(row: dict[str, Any]) -> str:
+    return str(
+        row.get("StockCode")
+        or row.get("stockCode")
+        or row.get("ticker")
+        or row.get("Code")
+        or row.get("code")
+        or ""
+    ).strip().upper()
+
+
+def _items(payload: Any) -> list[dict[str, Any]]:
+    current = payload
+    for _ in range(6):
+        if isinstance(current, list):
+            return [x for x in current if isinstance(x, dict)]
+        if not isinstance(current, dict):
+            return []
+        child = current.get("items")
+        if not isinstance(child, (list, dict)):
+            child = current.get("data")
+        if isinstance(child, (list, dict)):
+            current = child
+            continue
+        return []
+    return []
+
+
+def _payload_ticker(payload: Any) -> str:
+    current = payload
+    for _ in range(6):
+        if isinstance(current, dict):
+            code = (
+                current.get("code")
+                or current.get("Code")
+                or current.get("ticker")
+                or current.get("StockCode")
+            )
+            if code:
+                return str(code).strip().upper()
+            child = current.get("data")
+            if isinstance(child, dict):
+                current = child
+                continue
+        break
+    rows = _items(payload)
+    return _ticker(rows[0]) if rows else ""
+
+
+def stock_summary_candle(
+    row: dict[str, Any],
+    *,
+    trade_date: str,
+) -> dict[str, Any] | None:
+    row_date = str(
+        row.get("Date")
+        or row.get("date")
+        or row.get("TradingDate")
+        or ""
+    )[:10]
+    if row_date != trade_date:
+        return None
+
+    opening = _number(row, "OpenPrice", "Open", "open")
+    high = _number(row, "High", "high")
+    low = _number(row, "Low", "low")
+    close = _number(row, "Close", "close")
+    volume = _number(row, "Volume", "volume")
+    value = _number(row, "Value", "value")
+
+    if None in (opening, high, low, close, volume):
+        return None
+    if opening <= 0 or low <= 0 or high < low or not low <= close <= high or volume < 0:
+        return None
+
+    return {
+        "Date": trade_date,
+        "Open": opening,
+        "High": high,
+        "Low": low,
+        "Close": close,
+        "Volume": volume,
+        "Value": value,
+        "_source": "stock-summary-eod",
+    }
+
+
+def merge_completed_candle(
+    history_payload: Any,
+    candle: dict[str, Any],
+    *,
+    max_sessions: int = 120,
+) -> dict[str, Any]:
+    rows = [dict(x) for x in _items(history_payload)]
+    target = str(candle["Date"])[:10]
+
+    by_date: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        stamp = str(row.get("date") or row.get("Date") or "")[:10]
+        if len(stamp) == 10:
+            by_date[stamp] = row
+
+    # EOD stock-summary is authoritative for the just-completed target session.
+    by_date[target] = dict(candle)
+    ordered = [by_date[key] for key in sorted(by_date)]
+    if max_sessions > 0:
+        ordered = ordered[-int(max_sessions):]
+    return {"data": ordered}
+
+
+def _choose_summary_payload(
+    candidates: list[tuple[Any, datetime]],
+    *,
+    trade_date: str,
+) -> tuple[Any, datetime, dict[str, dict[str, Any]]]:
+    best: tuple[Any, datetime, dict[str, dict[str, Any]]] | None = None
+    best_count = -1
+
+    for payload, saved_at in candidates:
+        rows = _items(payload)
+        mapped: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            code = _ticker(row)
+            if not code:
+                continue
+            candle = stock_summary_candle(row, trade_date=trade_date)
+            if candle is not None:
+                mapped[code] = row
+        if len(mapped) > best_count:
+            best_count = len(mapped)
+            best = (payload, saved_at, mapped)
+
+    if best is None or best_count <= 0:
+        raise RuntimeError(
+            f"Tidak ada stock-summary cache dengan completed date {trade_date}."
+        )
+    return best
+
+
+def finalize_eod(
+    *,
+    asof: datetime | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    now = (asof or datetime.now(WIB)).astimezone(WIB)
+    trade_date = now.date().isoformat()
+
+    if now.weekday() >= 5 and not force:
+        return {
+            "status": "SKIPPED_WEEKEND",
+            "trade_date": trade_date,
+            "finalized": 0,
+        }
+    if (now.hour, now.minute) < (17, 0) and not force:
+        raise RuntimeError("EOD Finalizer hanya boleh berjalan mulai 17:00 WIB.")
+
+    database_url = configured_database_url()
+    if not database_url:
+        raise RuntimeError("PROJECT_FABRIC_DATABASE_URL belum dikonfigurasi.")
+    if psycopg is None:
+        raise RuntimeError("psycopg tidak tersedia.")
+
+    with psycopg.connect(
+        database_url,
+        connect_timeout=8,
+        autocommit=True,
+    ) as con:
+        with con.cursor() as cur:
+            cur.execute(
+                """
+                SELECT value_json, saved_at
+                FROM project_fabric.cache_entries
+                WHERE namespace = %s
+                  AND cache_key LIKE 'idx:stock-summary:%%'
+                  AND saved_at >= now() - interval '36 hours'
+                ORDER BY saved_at DESC
+                LIMIT 30
+                """,
+                (NAMESPACE,),
+            )
+            summary_candidates = list(cur.fetchall())
+
+            cur.execute(
+                """
+                SELECT value_json, saved_at
+                FROM project_fabric.cache_entries
+                WHERE namespace = %s
+                  AND cache_key LIKE 'idx:stock-history:%%'
+                ORDER BY saved_at DESC
+                LIMIT 5000
+                """,
+                (NAMESPACE,),
+            )
+            history_candidates = list(cur.fetchall())
+
+    summary_payload, summary_saved_at, summary_rows = _choose_summary_payload(
+        summary_candidates,
+        trade_date=trade_date,
+    )
+
+    # Keep only the newest raw history payload for each ticker.
+    latest_history: dict[str, tuple[Any, datetime]] = {}
+    for payload, saved_at in history_candidates:
+        code = _payload_ticker(payload)
+        if not code or code in latest_history:
+            continue
+        latest_history[code] = (payload, saved_at)
+
+    cache = PostgresTTLCache(
+        database_url,
+        namespace=NAMESPACE,
+        service="cuankus-momentum-eod",
+        auto_migrate=False,
+    )
+
+    eod_summary = summary_snapshot(
+        summary_payload,
+        observed_at=now.isoformat(timespec="seconds"),
+    )
+    eod_summary["source"] = "idx:stock-summary:eod-finalized"
+    eod_summary["eod_finalized_date"] = trade_date
+    cache.set(_cache_key(SUMMARY_ENDPOINT, SUMMARY_PARAMS), eod_summary)
+
+    finalized = 0
+    skipped_no_summary = 0
+    skipped_short_history = 0
+    failed = 0
+    failures: list[str] = []
+
+    for ticker, (history_payload, history_saved_at) in latest_history.items():
+        summary_row = summary_rows.get(ticker)
+        if summary_row is None:
+            skipped_no_summary += 1
+            continue
+
+        candle = stock_summary_candle(summary_row, trade_date=trade_date)
+        if candle is None:
+            skipped_no_summary += 1
+            continue
+
+        try:
+            merged = merge_completed_candle(
+                history_payload,
+                candle,
+                max_sessions=120,
+            )
+            calculated = history_features(
+                ticker,
+                merged,
+                asof=now,
+                completed_through=trade_date,
+                source="idx:stock-history+stock-summary-eod",
+            )
+            if (
+                calculated.get("history_sessions", 0) < 30
+                or calculated.get("history_last_date") != trade_date
+            ):
+                skipped_short_history += 1
+                continue
+
+            calculated.update(
+                {
+                    "eod_finalized": True,
+                    "eod_finalized_date": trade_date,
+                    "eod_finalized_at": now.isoformat(timespec="seconds"),
+                    "eod_summary_saved_at": summary_saved_at.isoformat(),
+                    "base_history_saved_at": history_saved_at.isoformat(),
+                }
+            )
+            cache.set(
+                _cache_key(HISTORY_ENDPOINT, {"ticker": ticker}),
+                calculated,
+            )
+            finalized += 1
+        except Exception as exc:
+            failed += 1
+            if len(failures) < 20:
+                failures.append(
+                    f"{ticker}:{type(exc).__name__}:{str(exc)[:120]}"
+                )
+
+    status = {
+        "schema_version": 1,
+        "status": "SUCCESS" if finalized > 0 and failed == 0 else "PARTIAL",
+        "trade_date": trade_date,
+        "finalized_at": now.isoformat(timespec="seconds"),
+        "source": "cached-stock-history+cached-stock-summary-eod",
+        "zapi_calls": 0,
+        "summary_rows": len(summary_rows),
+        "history_payloads": len(latest_history),
+        "finalized": finalized,
+        "skipped_no_summary": skipped_no_summary,
+        "skipped_short_history": skipped_short_history,
+        "failed": failed,
+        "failures": failures,
+    }
+    cache.set(_cache_key(EOD_STATUS_ENDPOINT, EOD_STATUS_PARAMS), status)
+    return status
+
+
+def main() -> None:
+    force = os.getenv("EOD_FINALIZER_FORCE", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    result = finalize_eod(force=force)
+    print(
+        "[EOD-FINALIZER] "
+        f"status={result.get('status')} "
+        f"trade_date={result.get('trade_date')} "
+        f"finalized={result.get('finalized', 0)} "
+        f"failed={result.get('failed', 0)} "
+        f"zapi_calls={result.get('zapi_calls', 0)}"
+    )
+    if result.get("failures"):
+        for item in result["failures"]:
+            print(f"[EOD-FINALIZER-FAIL] {item}")
+    if result.get("status") == "PARTIAL" and result.get("finalized", 0) == 0:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

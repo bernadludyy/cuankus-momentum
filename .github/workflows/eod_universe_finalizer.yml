@@ -1,0 +1,50 @@
+name: Bot 4 EOD Universe Finalizer
+
+on:
+  schedule:
+    # 17:00 WIB = 10:00 UTC, Monday-Friday.
+    - cron: "0 10 * * 1-5"
+  # Bootstrap today's EOD cache when this workflow is first deployed to main.
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/eod_universe_finalizer.yml"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Allow manual run before 17:00 WIB / weekend"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cuankus-momentum-eod-finalizer
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PROJECT_FABRIC_DATABASE_URL: ${{ secrets.PROJECT_FABRIC_DATABASE_URL }}
+      PROJECT_FABRIC_CACHE_NAMESPACE: shared-v1
+      PROJECT_FABRIC_DB_REQUIRED: "true"
+      EOD_FINALIZER_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || 'false' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile EOD finalizer
+        run: python -m py_compile project_fabric/eod_finalizer.py project_fabric/universe_intelligence.py
+
+      - name: Finalize completed IDX session
+        run: python -m project_fabric.eod_finalizer

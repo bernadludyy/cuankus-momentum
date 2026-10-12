@@ -129,12 +129,23 @@ def summary_snapshot(payload: Any, observed_at: str | None = None) -> dict:
             "source": "idx:stock-summary", "count": len(signals), "tickers": signals}
 
 
-def _history(payload: Any, asof: datetime | None = None) -> list[dict]:
+def _history(
+    payload: Any,
+    asof: datetime | None = None,
+    *,
+    completed_through: str | None = None,
+) -> list[dict]:
     today = (asof or datetime.now(WIB)).astimezone(WIB).date().isoformat()
+    inclusive_completed = str(completed_through)[:10] if completed_through else None
     dates: dict[str, dict] = {}
     for row in _items(payload):
         stamp = str(row.get("date") or row.get("Date") or "")[:10]
-        if len(stamp) != 10 or stamp >= today:
+        if len(stamp) != 10:
+            continue
+        if inclusive_completed is not None:
+            if stamp > inclusive_completed:
+                continue
+        elif stamp >= today:
             continue
         op = _number(row, "open", "Open")
         hi = _number(row, "high", "High")
@@ -152,13 +163,29 @@ def _missing(status: str = "NEED_HISTORY") -> dict:
     return {"score": None, "status": status}
 
 
-def history_features(ticker: str, payload: Any, asof: datetime | None = None) -> dict:
-    """Five independently inspectable features; no look-ahead/current partial candle."""
-    rows = _history(payload, asof)
+def history_features(
+    ticker: str,
+    payload: Any,
+    asof: datetime | None = None,
+    *,
+    completed_through: str | None = None,
+    source: str = "idx:stock-history:completed-sessions",
+) -> dict:
+    """Five independently inspectable features.
+
+    Intraday callers keep the existing fail-closed behavior and exclude today's
+    partial candle. The 17:00 EOD finalizer may explicitly pass
+    completed_through=YYYY-MM-DD after the session has closed.
+    """
+    rows = _history(
+        payload,
+        asof,
+        completed_through=completed_through,
+    )
     result = {
         "schema_version": VERSION,
         "ticker": ticker.strip().upper(),
-        "source": "idx:stock-history:completed-sessions",
+        "source": source,
         "history_sessions": len(rows),
         "history_last_date": rows[-1]["date"] if rows else None,
         "observed_at": (asof or datetime.now(WIB)).isoformat(timespec="seconds"),
