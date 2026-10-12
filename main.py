@@ -1118,6 +1118,150 @@ def format_live_reversal_cancelled(result: dict, watch: dict) -> str:
     )
 
 
+
+def run_live_reversal_engine(quotes: list[dict]) -> None:
+    if not REVERSAL_LIVE_ENABLED:
+        return
+
+    bootstrap_reversal_watches_from_recent_alerts()
+    watches = get_active_reversal_watches(
+        max_age_minutes=REVERSAL_WATCH_MINUTES,
+        limit=REVERSAL_MAX_WATCHES,
+    )
+    if not watches:
+        print("[REVERSAL-LIVE] no active post-alert watch")
+        return
+
+    price_by_ticker = {
+        str(item.get("ticker") or "").upper(): item.get("last")
+        for item in quotes
+        if item.get("ticker")
+    }
+    executable = [
+        watch
+        for watch in watches
+        if price_by_ticker.get(str(watch["ticker"]).upper()) is not None
+    ]
+
+    print(
+        f"[REVERSAL-LIVE] active={len(watches)} "
+        f"priced={len(executable)} max={REVERSAL_MAX_WATCHES}"
+    )
+    if not executable:
+        return
+
+    results: list[tuple[dict, dict]] = []
+    worker_count = min(3, len(executable))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {
+            executor.submit(
+                evaluate_live_reversal_watch,
+                watch,
+                current_price=float(
+                    price_by_ticker[str(watch["ticker"]).upper()]
+                ),
+            ): watch
+            for watch in executable
+        }
+        for future in as_completed(future_map):
+            watch = future_map[future]
+            ticker = str(watch["ticker"]).upper()
+            try:
+                result = future.result()
+            except Exception as exc:
+                print(
+                    f"[REVERSAL-LIVE-FAILED] {ticker}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                continue
+            results.append((watch, result))
+
+    for watch, result in results:
+        ticker = str(watch["ticker"]).upper()
+        status = result.get("status")
+        print(
+            f"[REVERSAL-LIVE] {ticker}: status={status} "
+            f"price={result.get('current_price')} "
+            f"score={result.get('score')} "
+            f"delta={result.get('cumulative_delta')} "
+            f"batch_delta={result.get('batch_delta')}"
+        )
+
+        if status == "ENTRY_CONFIRMED":
+            signal_event_id = _OBS.record_signal(
+                signal_type="REVERSAL_ENTRY_CONFIRMED",
+                entity=ticker,
+                score=result.get("score"),
+                status="entry_confirmed",
+                payload={
+                    "source_lane": result.get("source_lane"),
+                    "alert_price": result.get("alert_price"),
+                    "current_price": result.get("current_price"),
+                    "pullback_lower": result.get("pullback_lower"),
+                    "pullback_upper": result.get("pullback_upper"),
+                    "low_seen": result.get("low_seen"),
+                    "cumulative_delta": result.get("cumulative_delta"),
+                    "cumulative_buy_ratio": result.get("cumulative_buy_ratio"),
+                    "batch_delta": result.get("batch_delta"),
+                    "delta_flip": result.get("delta_flip"),
+                    "selling_absorption_live": result.get("selling_absorption_live"),
+                    "bid_percent": result.get("bid_percent"),
+                    "matched_trade_count": result.get("cumulative_trade_count"),
+                },
+            )
+            target = str(result.get("target") or watch.get("target") or "all")
+            delivery = send_telegram(
+                format_live_reversal_confirmed(result),
+                target=target,
+            )
+            ok = bool(delivery.get("ok"))
+            _OBS.record_delivery(
+                channel="telegram",
+                status="success" if ok else "failed",
+                signal_event_id=signal_event_id,
+                destination="configured-telegram-targets",
+                metadata={
+                    "ticker": ticker,
+                    "signal_type": "REVERSAL_ENTRY_CONFIRMED",
+                    "sent": delivery.get("sent", 0),
+                    "failed": delivery.get("failed", 0),
+                },
+            )
+            if ok:
+                update_reversal_watch(
+                    ticker,
+                    state="CONFIRMED",
+                    confirmed_ts=now_wib_iso(),
+                )
+                print(
+                    f"[REVERSAL-ENTRY-ALERT] {ticker}: "
+                    f"score={result.get('score')} sent={delivery.get('sent')}"
+                )
+            else:
+                print(
+                    f"[REVERSAL-ENTRY-TELEGRAM-FAILED] {ticker}; "
+                    "watch remains active for retry."
+                )
+
+        elif status == "CANCELLED" and result.get("send_failed_alert"):
+            target = str(watch.get("target") or "all")
+            delivery = send_telegram(
+                format_live_reversal_cancelled(result, watch),
+                target=target,
+            )
+            _OBS.record_delivery(
+                channel="telegram",
+                status="success" if delivery.get("ok") else "failed",
+                destination="configured-telegram-targets",
+                metadata={
+                    "ticker": ticker,
+                    "signal_type": "REVERSAL_SETUP_CANCELLED",
+                    "sent": delivery.get("sent", 0),
+                    "failed": delivery.get("failed", 0),
+                },
+            )
+
+
 def run_once() -> None:
     init_db()
 
