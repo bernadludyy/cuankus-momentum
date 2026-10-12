@@ -35,6 +35,10 @@ from scanner.liquidity_observer import (
     dynamic_liquidity_threshold,
     build_dynamic_liquidity_observation,
 )
+from scanner.entry_setup import (
+    idx_tick_size,
+    build_pullback_reversal_entry,
+)
 from scanner.engine import select_next_primary_phase
 import storage.db as db
 
@@ -172,6 +176,70 @@ def test_tradeflow_aggressive_values_and_trend() -> None:
         flat_tolerance_pct=5,
     )
     assert falling["aggression_trend"] == "FALLING", falling
+
+
+def test_pullback_reversal_entry_plan_uses_idx_ticks() -> None:
+    assert idx_tick_size(33) == 1.0
+    assert idx_tick_size(250) == 2.0
+
+    beks = {
+        "ticker": "BEKS",
+        "price": 33,
+        "breakout_pct": 3.12,
+        "aggressive_buy_ratio": 0.8122,
+        "bid_percent": 51.0,
+        "net_aggression_value": 337_240_000,
+        "aggression_trend": "INSUFFICIENT_HISTORY",
+        "anti_falling_knife_relaxed_pass": True,
+        "not_overextended": True,
+        "selling_absorption": "NONE",
+    }
+    setup = build_pullback_reversal_entry(beks)
+    assert setup is not None
+    assert setup["pullback_lower"] == 31.0
+    assert setup["pullback_upper"] == 32.0
+    assert setup["reversal_trigger"] == 33.0
+    assert setup["breakout_base"] == 32.0
+    assert setup["entry_confirmation"] == "PARTIAL — WAIT TREND"
+
+    falling = dict(
+        beks,
+        aggression_trend="FALLING",
+        net_aggression_value=-50_000_000,
+    )
+    setup2 = build_pullback_reversal_entry(falling)
+    assert setup2 is not None
+    assert setup2["entry_confirmation"] == "AVOID / WAIT RESET"
+
+
+def test_telegram_alert_contains_pullback_reversal_entry_section() -> None:
+    text = format_alert(
+        {
+            "phase": "PRE_MOMENTUM",
+            "ticker": "BEKS",
+            "price": 33,
+            "score": 68.3,
+            "quality_score": 65.2,
+            "breakout_pct": 3.12,
+            "aggressive_buy_ratio": 0.8122,
+            "bid_percent": 51.0,
+            "net_aggression_value": 337_240_000,
+            "aggression_trend": "INSUFFICIENT_HISTORY",
+            "anti_falling_knife_relaxed_pass": True,
+            "not_overextended": True,
+            "selling_absorption": "NONE",
+            "filter2_relaxed": True,
+            "transaction_value_ma50": 2_550_000_000,
+            "value_ma": 15_790_000_000,
+            "market_cap": 1_690_000_000_000,
+        },
+        rank=1,
+    )
+    assert "ENTRY REVERSAL / PULLBACK" in text
+    assert "Pullback Area: Rp31–Rp32" in text
+    assert "Reversal Trigger: reclaim ≥ Rp33 | Base Rp32" in text
+    assert "Buyer Confirm: PARTIAL — WAIT TREND" in text
+    assert "Invalidation: < Rp30" in text
 
 
 def test_rupiah_units_are_indonesian_and_directional_only_for_net() -> None:
@@ -693,6 +761,8 @@ if __name__ == "__main__":
     test_filter1_leakage_is_context_not_a_separate_telegram_stage()
     test_trade_age_parser()
     test_tradeflow_aggressive_values_and_trend()
+    test_pullback_reversal_entry_plan_uses_idx_ticks()
+    test_telegram_alert_contains_pullback_reversal_entry_section()
     test_rupiah_units_are_indonesian_and_directional_only_for_net()
     test_historical_alert_explains_missing_quality()
     test_tradeflow_replaces_golden_pocket_in_telegram()
