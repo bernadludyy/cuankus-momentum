@@ -1043,15 +1043,84 @@ def register_reversal_watch_from_result(result: dict, *, lane: str, target: str)
 def bootstrap_reversal_watches_from_recent_alerts() -> int:
     if not REVERSAL_LIVE_ENABLED:
         return 0
+
+    limit = max(REVERSAL_MAX_WATCHES * 3, 10)
+    seeds = list(
+        get_recent_alert_seeds(
+            max_age_minutes=REVERSAL_WATCH_MINUTES,
+            limit=limit,
+        )
+    )
+
+    # Recover alert candidates from Neon too. This covers partial Telegram
+    # deliveries where private succeeded but group failed, so SQLite cooldown
+    # state was intentionally not committed (e.g. BEKS 10:06).
+    if _OBS.enabled:
+        try:
+            with _OBS._connect() as con:
+                with con.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT signal_type, entity, occurred_at, payload
+                        FROM project_fabric.signal_events
+                        WHERE service = %s
+                          AND status = 'alert_candidate'
+                          AND signal_type = ANY(%s)
+                          AND occurred_at >= now() - (%s * interval '1 minute')
+                        ORDER BY occurred_at DESC
+                        LIMIT %s
+                        """,
+                        (
+                            "cuankus-momentum",
+                            [
+                                "EARLY_IGNITION",
+                                "PRE_MOMENTUM",
+                                "POWERFUL_MOMENTUM",
+                                "FILTER2_EARLY_IGNITION",
+                                "FILTER2_PRE_MOMENTUM",
+                                "FILTER2_POWERFUL_MOMENTUM",
+                            ],
+                            REVERSAL_WATCH_MINUTES,
+                            limit,
+                        ),
+                    )
+                    rows = cur.fetchall()
+            for signal_type, entity, occurred_at, payload in rows:
+                payload = payload if isinstance(payload, dict) else {}
+                price = payload.get("price")
+                if entity and price is not None:
+                    raw_type = str(signal_type)
+                    lane = "FILTER2" if raw_type.startswith("FILTER2_") else "FILTER1"
+                    phase = (
+                        raw_type[len("FILTER2_"):]
+                        if raw_type.startswith("FILTER2_")
+                        else raw_type
+                    )
+                    seeds.append(
+                        {
+                            "ticker": str(entity).upper(),
+                            "ts": occurred_at.isoformat(),
+                            "phase": phase,
+                            "price": price,
+                            "lane": lane,
+                        }
+                    )
+        except Exception as exc:
+            print(
+                f"[REVERSAL-BOOTSTRAP-NEON-WARN] "
+                f"{type(exc).__name__}: {str(exc)[:180]}"
+            )
+
+    seeds.sort(key=lambda item: str(item.get("ts") or ""), reverse=True)
     created = 0
-    for seed in get_recent_alert_seeds(
-        max_age_minutes=REVERSAL_WATCH_MINUTES,
-        limit=max(REVERSAL_MAX_WATCHES * 3, 10),
-    ):
+    seen: set[str] = set()
+    for seed in seeds:
         ticker = str(seed.get("ticker") or "").upper()
         price = seed.get("price")
-        if not ticker or price is None:
+        if not ticker or price is None or ticker in seen:
             continue
+        seen.add(ticker)
+
         setup = build_pullback_reversal_entry({"ticker": ticker, "price": price})
         if setup is None:
             continue
@@ -1068,9 +1137,11 @@ def bootstrap_reversal_watches_from_recent_alerts() -> int:
             alert_ts=str(seed["ts"]),
         ):
             created += 1
-            print(f"[REVERSAL-WATCH-BOOTSTRAP] {ticker} {seed.get('ts')}")
+            print(
+                f"[REVERSAL-WATCH-BOOTSTRAP] {ticker}: "
+                f"source={seed.get('lane')} alert_ts={seed.get('ts')}"
+            )
     return created
-
 
 def format_live_reversal_confirmed(result: dict) -> str:
     delta_flip = "YES ✅" if result.get("delta_flip") else "NO"
