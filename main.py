@@ -1882,6 +1882,11 @@ def run_once() -> None:
         if delivery_ok:
             mark_alerted(result)
             primary_alerted_tickers.add(ticker)
+            register_reversal_watch_from_result(
+                result,
+                lane="FILTER1_STRICT",
+                target="private" if ticker == "PTSN" else "all",
+            )
             print(
                 f"[ALERT] #{rank} {ticker} "
                 f"{result['phase']} score={result['score']} "
@@ -1948,6 +1953,11 @@ def run_once() -> None:
                 ticker,
                 float(result.get("score") or 0),
                 result.get("price"),
+            )
+            register_reversal_watch_from_result(
+                result,
+                lane="FILTER2_RELAXED",
+                target="private" if ticker == "PTSN" else "all",
             )
             print(
                 f"[FILTER2-ALERT] #{rank} {ticker} "
@@ -2026,6 +2036,10 @@ def run_once() -> None:
                 print(f"[PTSN-PRIVATE] {ticker} {stage} score={candidate['structure_score']}")
             else:
                 print(f"[PTSN-PRIVATE-FAILED] {ticker}: private alert not recorded")
+
+    # Post-alert lifecycle: only recently alerted tickers are watched, and live
+    # running-trade/orderbook calls start after a pullback/retest is observed.
+    run_live_reversal_engine(quotes)
 
 
 if __name__ == "__main__":
