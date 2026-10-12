@@ -1071,3 +1071,98 @@ def save_reversal_trade_if_new(
     con.commit()
     con.close()
     return inserted
+
+
+
+def ensure_reversal_watch(
+    *,
+    ticker: str,
+    source_lane: str,
+    source_phase: str | None,
+    target: str,
+    alert_price: float,
+    pullback_lower: float,
+    pullback_upper: float,
+    reversal_trigger: float,
+    invalidation_price: float,
+    alert_ts: str,
+) -> bool:
+    con = connect()
+    cur = con.execute(
+        """
+        INSERT OR IGNORE INTO reversal_watches (
+            ticker, source_lane, source_phase, target,
+            alert_ts, alert_price, pullback_lower, pullback_upper,
+            reversal_trigger, invalidation_price, state,
+            touch_ts, low_seen, last_price,
+            cumulative_buy_value, cumulative_sell_value,
+            cumulative_buy_lots, cumulative_sell_lots,
+            new_trade_count, last_delta_value, last_score,
+            last_eval_ts, confirmed_ts, cancelled_ts
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'WAIT_PULLBACK',
+            NULL, NULL, ?, 0, 0, 0, 0, 0, NULL, NULL, ?, NULL, NULL
+        )
+        """,
+        (
+            ticker.upper(),
+            str(source_lane),
+            source_phase,
+            str(target),
+            str(alert_ts),
+            float(alert_price),
+            float(pullback_lower),
+            float(pullback_upper),
+            float(reversal_trigger),
+            float(invalidation_price),
+            float(alert_price),
+            now_wib_iso(),
+        ),
+    )
+    inserted = cur.rowcount > 0
+    con.commit()
+    con.close()
+    return inserted
+
+
+def get_recent_alert_seeds(
+    *,
+    max_age_minutes: int,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    cutoff = datetime.now(WIB) - timedelta(minutes=max(1, int(max_age_minutes)))
+    today = datetime.now(WIB).date().isoformat()
+    con = connect()
+    rows = con.execute(
+        """
+        SELECT ticker, ts, phase, price, 'FILTER1' AS lane
+        FROM alerts
+        WHERE ts >= ? AND substr(ts, 1, 10) = ?
+        UNION ALL
+        SELECT ticker, ts, NULL AS phase, price, 'FILTER2' AS lane
+        FROM screener_alerts
+        WHERE screener = 'FILTER2_RELAXED_MOMENTUM'
+          AND ts >= ? AND substr(ts, 1, 10) = ?
+        ORDER BY ts DESC
+        LIMIT ?
+        """,
+        (
+            cutoff.isoformat(timespec="seconds"),
+            today,
+            cutoff.isoformat(timespec="seconds"),
+            today,
+            max(1, int(limit)),
+        ),
+    ).fetchall()
+    con.close()
+
+    seen: set[str] = set()
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        ticker = str(item["ticker"]).upper()
+        if ticker in seen or item.get("price") is None:
+            continue
+        seen.add(ticker)
+        output.append(item)
+    return output
