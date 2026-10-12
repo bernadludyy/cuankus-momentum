@@ -178,6 +178,32 @@ ENTRY_MIN_BID_PERCENT = float(
     os.getenv("ENTRY_MIN_BID_PERCENT", "50")
 )
 
+# Live post-alert reversal engine. It only watches a small set of recently
+# alerted tickers and activates matched-trade analysis after pullback/retest.
+REVERSAL_LIVE_ENABLED = os.getenv(
+    "REVERSAL_LIVE_ENABLED", "true"
+).lower() in {"1", "true", "yes", "y"}
+REVERSAL_WATCH_MINUTES = int(os.getenv("REVERSAL_WATCH_MINUTES", "360"))
+REVERSAL_MAX_WATCHES = int(os.getenv("REVERSAL_MAX_WATCHES", "3"))
+REVERSAL_CONFIRM_SCORE = float(os.getenv("REVERSAL_CONFIRM_SCORE", "80"))
+REVERSAL_BUILDING_SCORE = float(os.getenv("REVERSAL_BUILDING_SCORE", "70"))
+REVERSAL_MIN_NEW_TRADES = int(os.getenv("REVERSAL_MIN_NEW_TRADES", "3"))
+REVERSAL_MIN_AGGRESSIVE_BUY_RATIO = float(
+    os.getenv("REVERSAL_MIN_AGGRESSIVE_BUY_RATIO", "0.60")
+)
+REVERSAL_MIN_NET_AGGRESSION_IDR = float(
+    os.getenv("REVERSAL_MIN_NET_AGGRESSION_IDR", "50000000")
+)
+REVERSAL_MIN_BID_PERCENT = float(
+    os.getenv("REVERSAL_MIN_BID_PERCENT", "50")
+)
+REVERSAL_MIN_ABSORBED_SELL_IDR = float(
+    os.getenv("REVERSAL_MIN_ABSORBED_SELL_IDR", "50000000")
+)
+REVERSAL_FAILED_ALERT_ENABLED = os.getenv(
+    "REVERSAL_FAILED_ALERT_ENABLED", "true"
+).lower() in {"1", "true", "yes", "y"}
+
 # Selling absorption is a soft smart-money signal, not a hard entry gate.
 SELLING_ABSORPTION_MIN_SELL_VALUE_IDR = float(
     os.getenv("SELLING_ABSORPTION_MIN_SELL_VALUE_IDR", "250000000")
