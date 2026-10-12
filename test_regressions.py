@@ -39,6 +39,11 @@ from scanner.entry_setup import (
     idx_tick_size,
     build_pullback_reversal_entry,
 )
+import scanner.reversal_live as reversal_live
+from scanner.reversal_live import (
+    extract_new_matched_trades,
+    score_live_reversal,
+)
 from scanner.engine import select_next_primary_phase
 import storage.db as db
 
@@ -240,6 +245,159 @@ def test_telegram_alert_contains_pullback_reversal_entry_section() -> None:
     assert "Reversal Trigger: reclaim ≥ Rp33 | Base Rp32" in text
     assert "Buyer Confirm: PARTIAL — WAIT TREND" in text
     assert "Invalidation: < Rp30" in text
+
+
+
+def test_live_reversal_matched_trades_are_deduplicated() -> None:
+    seen = set()
+    original_save = reversal_live.save_reversal_trade_if_new
+    try:
+        def fake_save(**kwargs):
+            key = (
+                kwargs["ticker"],
+                kwargs["trade_day"],
+                kwargs["trade_key"],
+            )
+            if key in seen:
+                return False
+            seen.add(key)
+            return True
+
+        reversal_live.save_reversal_trade_if_new = fake_save
+        payload = {
+            "items": [
+                {
+                    "id": "t1",
+                    "time": "13:31:00",
+                    "action": "SELL",
+                    "price": 32,
+                    "lots": 100,
+                },
+                {
+                    "id": "t2",
+                    "time": "13:32:00",
+                    "action": "BUY",
+                    "price": 32,
+                    "lots": 200,
+                },
+                {
+                    "id": "t3",
+                    "time": "13:33:00",
+                    "action": "BUY",
+                    "price": 33,
+                    "lots": 300,
+                },
+            ]
+        }
+        first = extract_new_matched_trades(
+            "BEKS",
+            payload,
+            touch_ts="2026-10-12T13:30:00+07:00",
+        )
+        second = extract_new_matched_trades(
+            "BEKS",
+            payload,
+            touch_ts="2026-10-12T13:30:00+07:00",
+        )
+        assert first["new_trade_count"] == 3, first
+        assert first["new_buy_value"] == 32 * 200 * 100 + 33 * 300 * 100
+        assert first["new_sell_value"] == 32 * 100 * 100
+        assert second["new_trade_count"] == 0, second
+        assert second["new_buy_value"] == 0
+        assert second["new_sell_value"] == 0
+    finally:
+        reversal_live.save_reversal_trade_if_new = original_save
+
+
+def test_live_reversal_requires_reclaim_and_matched_buyer_takeover() -> None:
+    watch = {
+        "ticker": "BEKS",
+        "alert_price": 33,
+        "pullback_lower": 31,
+        "pullback_upper": 32,
+        "reversal_trigger": 33,
+        "invalidation_price": 30,
+        "low_seen": 31,
+        "cumulative_buy_value": 0,
+        "cumulative_sell_value": 60_000_000,
+        "cumulative_buy_lots": 0,
+        "cumulative_sell_lots": 10_000,
+        "new_trade_count": 1,
+        "last_delta_value": -60_000_000,
+    }
+    batch = {
+        "new_trade_count": 5,
+        "new_buy_trade_count": 4,
+        "new_sell_trade_count": 1,
+        "new_buy_value": 250_000_000,
+        "new_sell_value": 40_000_000,
+        "new_net_aggression": 210_000_000,
+        "new_buy_lots": 50_000,
+        "new_sell_lots": 5_000,
+        "new_aggressive_buy_ratio": 50_000 / 55_000,
+        "new_big_buy_ratio": 0.80,
+    }
+    book = {"bid_percent": 62.0}
+
+    before_reclaim = score_live_reversal(
+        watch,
+        current_price=32,
+        book=book,
+        batch=batch,
+    )
+    assert before_reclaim["score"] >= 70, before_reclaim
+    assert before_reclaim["status"] != "ENTRY_CONFIRMED"
+    assert before_reclaim["reclaimed"] is False
+
+    after_reclaim = score_live_reversal(
+        watch,
+        current_price=33,
+        book=book,
+        batch=batch,
+    )
+    assert after_reclaim["status"] == "ENTRY_CONFIRMED", after_reclaim
+    assert after_reclaim["cumulative_delta"] > 0
+    assert after_reclaim["delta_flip"] is True
+    assert after_reclaim["selling_absorption_live"] is True
+    assert after_reclaim["cumulative_buy_ratio"] >= 0.60
+
+
+def test_live_reversal_rejects_weak_matched_flow_even_after_reclaim() -> None:
+    watch = {
+        "ticker": "TEST",
+        "alert_price": 100,
+        "pullback_lower": 98,
+        "pullback_upper": 99,
+        "reversal_trigger": 100,
+        "invalidation_price": 97,
+        "low_seen": 98,
+        "cumulative_buy_value": 0,
+        "cumulative_sell_value": 0,
+        "cumulative_buy_lots": 0,
+        "cumulative_sell_lots": 0,
+        "new_trade_count": 0,
+        "last_delta_value": -10_000_000,
+    }
+    weak = {
+        "new_trade_count": 4,
+        "new_buy_trade_count": 1,
+        "new_sell_trade_count": 3,
+        "new_buy_value": 20_000_000,
+        "new_sell_value": 120_000_000,
+        "new_net_aggression": -100_000_000,
+        "new_buy_lots": 2_000,
+        "new_sell_lots": 12_000,
+        "new_aggressive_buy_ratio": 2_000 / 14_000,
+        "new_big_buy_ratio": 0.10,
+    }
+    result = score_live_reversal(
+        watch,
+        current_price=100,
+        book={"bid_percent": 40.0},
+        batch=weak,
+    )
+    assert result["status"] != "ENTRY_CONFIRMED", result
+    assert result["cumulative_delta"] < 0
 
 
 def test_rupiah_units_are_indonesian_and_directional_only_for_net() -> None:
@@ -763,6 +921,9 @@ if __name__ == "__main__":
     test_tradeflow_aggressive_values_and_trend()
     test_pullback_reversal_entry_plan_uses_idx_ticks()
     test_telegram_alert_contains_pullback_reversal_entry_section()
+    test_live_reversal_matched_trades_are_deduplicated()
+    test_live_reversal_requires_reclaim_and_matched_buyer_takeover()
+    test_live_reversal_rejects_weak_matched_flow_even_after_reclaim()
     test_rupiah_units_are_indonesian_and_directional_only_for_net()
     test_historical_alert_explains_missing_quality()
     test_tradeflow_replaces_golden_pocket_in_telegram()
