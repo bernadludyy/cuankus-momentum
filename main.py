@@ -51,6 +51,9 @@ from config import (
     FILTER1_TOP_N_ALERTS_PER_CYCLE,
     QUALITY_SCORE_ENABLED,
     ENTRY_SETUP_ENABLED,
+    REVERSAL_LIVE_ENABLED,
+    REVERSAL_WATCH_MINUTES,
+    REVERSAL_MAX_WATCHES,
     TOP_MOVER_COUNT,
     USE_MULTI_QUOTE,
     TRADEFLOW_INTERNAL_ENABLED,
@@ -87,6 +90,7 @@ from scanner.tradeflow import build_tradeflow_layers
 from scanner.quality import build_quality_metrics
 from scanner.liquidity_observer import build_dynamic_liquidity_observation
 from scanner.entry_setup import build_pullback_reversal_entry
+from scanner.reversal_live import evaluate_live_reversal_watch
 from scanner.microstructure import (
     apply_micro_confirmation,
     apply_relaxed_micro_confirmation,
@@ -109,6 +113,12 @@ from storage.db import (
     get_recent_tradeflow_snapshots,
     recent_screener_alert_exists,
     save_screener_alert,
+    upsert_reversal_watch,
+    ensure_reversal_watch,
+    get_active_reversal_watches,
+    get_recent_alert_seeds,
+    update_reversal_watch,
+    now_wib_iso,
 )
 
 
