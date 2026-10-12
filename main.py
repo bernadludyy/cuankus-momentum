@@ -1012,6 +1012,112 @@ def collect_quotes(tickers: list[str]) -> list[dict]:
     return list(result.values())
 
 
+
+def register_reversal_watch_from_result(result: dict, *, lane: str, target: str) -> bool:
+    if not REVERSAL_LIVE_ENABLED:
+        return False
+    setup = build_pullback_reversal_entry(result)
+    ticker = str(result.get("ticker") or "").upper().strip()
+    if not ticker or setup is None:
+        return False
+    upsert_reversal_watch(
+        ticker=ticker,
+        source_lane=lane,
+        source_phase=result.get("phase"),
+        target=target,
+        alert_price=float(setup["alert_price"]),
+        pullback_lower=float(setup["pullback_lower"]),
+        pullback_upper=float(setup["pullback_upper"]),
+        reversal_trigger=float(setup["reversal_trigger"]),
+        invalidation_price=float(setup["invalidation_price"]),
+    )
+    print(
+        f"[REVERSAL-WATCH-ARMED] {ticker}: lane={lane} "
+        f"alert={format_price(setup['alert_price'])} "
+        f"pullback={format_price(setup['pullback_lower'])}-"
+        f"{format_price(setup['pullback_upper'])}"
+    )
+    return True
+
+
+def bootstrap_reversal_watches_from_recent_alerts() -> int:
+    if not REVERSAL_LIVE_ENABLED:
+        return 0
+    created = 0
+    for seed in get_recent_alert_seeds(
+        max_age_minutes=REVERSAL_WATCH_MINUTES,
+        limit=max(REVERSAL_MAX_WATCHES * 3, 10),
+    ):
+        ticker = str(seed.get("ticker") or "").upper()
+        price = seed.get("price")
+        if not ticker or price is None:
+            continue
+        setup = build_pullback_reversal_entry({"ticker": ticker, "price": price})
+        if setup is None:
+            continue
+        if ensure_reversal_watch(
+            ticker=ticker,
+            source_lane=str(seed.get("lane") or "LEGACY_ALERT"),
+            source_phase=seed.get("phase"),
+            target="private" if ticker == "PTSN" else "all",
+            alert_price=float(setup["alert_price"]),
+            pullback_lower=float(setup["pullback_lower"]),
+            pullback_upper=float(setup["pullback_upper"]),
+            reversal_trigger=float(setup["reversal_trigger"]),
+            invalidation_price=float(setup["invalidation_price"]),
+            alert_ts=str(seed["ts"]),
+        ):
+            created += 1
+            print(f"[REVERSAL-WATCH-BOOTSTRAP] {ticker} {seed.get('ts')}")
+    return created
+
+
+def format_live_reversal_confirmed(result: dict) -> str:
+    delta_flip = "YES ✅" if result.get("delta_flip") else "NO"
+    absorption = "CONFIRMED ✅" if result.get("selling_absorption_live") else "WATCH"
+    return (
+        "✅ BOT 4 — REVERSAL ENTRY CONFIRMED\n"
+        f"{result.get('source_lane') or 'POST-ALERT WATCH'}\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"📌 {result['ticker']} | {format_price(result.get('current_price'))}\n"
+        f"⭐ Live Reversal Score: {format_num(result.get('score'), '/100')}\n\n"
+        "🎯 PRICE STRUCTURE\n"
+        f"• Alert Price: {format_price(result.get('alert_price'))}\n"
+        f"• Pullback Area: {format_price(result.get('pullback_lower'))}–"
+        f"{format_price(result.get('pullback_upper'))}\n"
+        f"• Pullback Low Seen: {format_price(result.get('low_seen'))}\n"
+        f"• Reclaim Trigger: ≥ {format_price(result.get('reversal_trigger'))} ✅\n"
+        f"• Invalidation: < {format_price(result.get('invalidation_price'))}\n\n"
+        "📊 MATCHED TRADES SEJAK PULLBACK\n"
+        f"• Agg Buy: {format_rupiah_compact(result.get('cumulative_buy_value'))}\n"
+        f"• Agg Sell: {format_rupiah_compact(result.get('cumulative_sell_value'))}\n"
+        f"• CVD / Net Aggression: {format_rupiah_signed(result.get('cumulative_delta'))}\n"
+        f"• Buyer Ratio: {format_num((result.get('cumulative_buy_ratio') or 0) * 100, '%')}\n"
+        f"• New Batch Delta: {format_rupiah_signed(result.get('batch_delta'))}\n"
+        f"• Delta Flip: {delta_flip}\n"
+        f"• Selling Absorption: {absorption}\n"
+        f"• Bid Dominance: {format_num(result.get('bid_percent'), '%')}\n"
+        f"• Matched Trades: {int(result.get('cumulative_trade_count') or 0)}\n\n"
+        "🟢 STATUS: BUYER TAKEOVER + PRICE RECLAIM\n"
+        "Entry terkonfirmasi setelah transaksi matched mendukung reversal.\n"
+        "⚠️ Bukan auto-order; tetap gunakan risk management."
+    )
+
+
+def format_live_reversal_cancelled(result: dict, watch: dict) -> str:
+    return (
+        "❌ BOT 4 — PULLBACK FAILED / SETUP CANCELLED\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"📌 {watch['ticker']} | {format_price(result.get('current_price'))}\n"
+        f"• Alert Price: {format_price(watch.get('alert_price'))}\n"
+        f"• Pullback Area: {format_price(watch.get('pullback_lower'))}–"
+        f"{format_price(watch.get('pullback_upper'))}\n"
+        f"• Invalidation: < {format_price(watch.get('invalidation_price'))}\n"
+        f"• Reason: {result.get('reason') or 'Struktur pullback gagal'}\n\n"
+        "🔴 Entry reversal dibatalkan; tunggu setup baru."
+    )
+
+
 def run_once() -> None:
     init_db()
 
