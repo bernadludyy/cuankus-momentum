@@ -3,6 +3,12 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from config import (
+    ENTRY_MIN_AGGRESSIVE_BUY_RATIO,
+    ENTRY_MIN_BID_PERCENT,
+    ENTRY_PULLBACK_TICKS,
+)
+
 
 def _number(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
@@ -47,8 +53,9 @@ def build_pullback_reversal_entry(result: dict[str, Any]) -> dict[str, Any] | No
     if alert_price is None or tick is None:
         return None
 
+    pullback_ticks = max(1, int(ENTRY_PULLBACK_TICKS))
     upper = max(tick, alert_price - tick)
-    lower = max(tick, alert_price - (2.0 * tick))
+    lower = max(tick, alert_price - (float(pullback_ticks) * tick))
     invalidation = max(tick, lower - tick)
 
     breakout_pct = _number(result.get("breakout_pct"))
@@ -72,9 +79,9 @@ def build_pullback_reversal_entry(result: dict[str, Any]) -> dict[str, Any] | No
 
     buyer_ratio_ok = (
         aggressive_buy_ratio is not None
-        and aggressive_buy_ratio >= 0.55
+        and aggressive_buy_ratio >= ENTRY_MIN_AGGRESSIVE_BUY_RATIO
     )
-    bid_ok = bid_percent is not None and bid_percent >= 50.0
+    bid_ok = bid_percent is not None and bid_percent >= ENTRY_MIN_BID_PERCENT
     net_ok = net_aggression is not None and net_aggression > 0
     trend_ok = trend in {"RISING", "FLAT"}
     trend_wait = trend in {"", "INSUFFICIENT_HISTORY", "MIXED"}
