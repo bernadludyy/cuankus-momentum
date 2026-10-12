@@ -262,7 +262,7 @@ def score_live_reversal(
 
     sell_absorption = (
         cumulative_sell >= REVERSAL_MIN_ABSORBED_SELL_IDR
-        and current_price >= low_seen
+        and current_price > low_seen
         and bid_percent is not None
         and bid_percent >= REVERSAL_MIN_BID_PERCENT
     )
