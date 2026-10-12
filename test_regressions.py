@@ -61,8 +61,9 @@ def test_telegram_supergroup_migration_retries_with_new_chat_id() -> None:
         notifier._MIGRATED_CHAT_IDS.clear()
 
         def fake_post(url, data, timeout):
-            calls.append(str(data["chat_id"]))
-            if len(calls) == 1:
+            chat_id = str(data["chat_id"])
+            calls.append(chat_id)
+            if chat_id == "-12345":
                 return FakeResponse(
                     400,
                     {
