@@ -39,6 +39,63 @@ from scanner.engine import select_next_primary_phase
 import storage.db as db
 
 
+def test_telegram_supergroup_migration_retries_with_new_chat_id() -> None:
+    class FakeResponse:
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self._body = body
+
+        def json(self):
+            return self._body
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise notifier.requests.HTTPError(
+                    f"{self.status_code} test error",
+                    response=self,
+                )
+
+    calls = []
+    original_post = notifier.requests.post
+    try:
+        notifier._MIGRATED_CHAT_IDS.clear()
+
+        def fake_post(url, data, timeout):
+            chat_id = str(data["chat_id"])
+            calls.append(chat_id)
+            if chat_id == "-12345":
+                return FakeResponse(
+                    400,
+                    {
+                        "ok": False,
+                        "error_code": 400,
+                        "description": (
+                            "Bad Request: group chat was upgraded "
+                            "to a supergroup chat"
+                        ),
+                        "parameters": {
+                            "migrate_to_chat_id": -1001234567890,
+                        },
+                    },
+                )
+            return FakeResponse(200, {"ok": True, "result": {}})
+
+        notifier.requests.post = fake_post
+        result = notifier._send_to_chat("test", "-12345")
+
+        assert result["ok"] is True
+        assert calls == ["-12345", "-1001234567890"]
+        assert notifier._MIGRATED_CHAT_IDS["-12345"] == "-1001234567890"
+
+        calls.clear()
+        result2 = notifier._send_to_chat("test2", "-12345")
+        assert result2["ok"] is True
+        assert calls == ["-1001234567890"]
+    finally:
+        notifier.requests.post = original_post
+        notifier._MIGRATED_CHAT_IDS.clear()
+
+
 def test_zero_is_not_missing() -> None:
     assert scoring_gte(0.0, -0.30)
     assert micro_gte(0.0, -0.30)
@@ -622,6 +679,7 @@ def test_ptsn_added_to_static_watchlist() -> None:
 
 
 if __name__ == "__main__":
+    test_telegram_supergroup_migration_retries_with_new_chat_id()
     test_zero_is_not_missing()
     test_ptsn_structural_watch_uses_cached_snapshots()
     test_ptsn_structural_confirmed_uses_existing_micro_only()
