@@ -50,6 +50,7 @@ from config import (
     FILTER1_MIN_VALUE_MA50_IDR,
     FILTER1_TOP_N_ALERTS_PER_CYCLE,
     QUALITY_SCORE_ENABLED,
+    ENTRY_SETUP_ENABLED,
     TOP_MOVER_COUNT,
     USE_MULTI_QUOTE,
     TRADEFLOW_INTERNAL_ENABLED,
@@ -85,6 +86,7 @@ from scanner.shareholder_filter import fetch_latest_shareholder_count
 from scanner.tradeflow import build_tradeflow_layers
 from scanner.quality import build_quality_metrics
 from scanner.liquidity_observer import build_dynamic_liquidity_observation
+from scanner.entry_setup import build_pullback_reversal_entry
 from scanner.microstructure import (
     apply_micro_confirmation,
     apply_relaxed_micro_confirmation,
@@ -781,6 +783,35 @@ def _trend_label(value) -> str:
     }.get(str(value or ""), "-")
 
 
+def _format_entry_setup(result: dict) -> str:
+    if not ENTRY_SETUP_ENABLED:
+        return ""
+
+    setup = build_pullback_reversal_entry(result)
+    if setup is None:
+        return ""
+
+    base = setup.get("breakout_base")
+    base_text = (
+        f" | Base {format_price(base)}"
+        if base is not None
+        else ""
+    )
+
+    return (
+        "🎯 ENTRY REVERSAL / PULLBACK\n"
+        f"• Pullback Area: "
+        f"{format_price(setup.get('pullback_lower'))}–"
+        f"{format_price(setup.get('pullback_upper'))}\n"
+        f"• Reversal Trigger: reclaim ≥ "
+        f"{format_price(setup.get('reversal_trigger'))}{base_text}\n"
+        f"• Buyer Confirm: {setup.get('entry_confirmation')}\n"
+        f"• Invalidation: < {format_price(setup.get('invalidation_price'))} "
+        f"atau selling pressure membesar\n"
+        "• Eksekusi: tunggu area pullback disentuh lalu buyer kembali dominan"
+    )
+
+
 def _phase_title(phase: str | None) -> tuple[str, str]:
     return {
         "EARLY_IGNITION": ("🔵", "EARLY IGNITION"),
@@ -833,6 +864,8 @@ def format_alert(
         f"⭐ Quality: "
         f"{format_num(result.get('quality_score'), '/100') if result.get('quality_score') is not None else 'N/A (data historis pre-V2)'} "
         f"| Momentum: {format_num(result.get('score'), '/100')}\n\n"
+
+        f"{_format_entry_setup(result)}\n\n"
 
         "💧 LIKUIDITAS\n"
         f"• Tx Value MA50: "
