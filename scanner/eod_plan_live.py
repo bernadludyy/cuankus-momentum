@@ -66,6 +66,28 @@ def load_eod_entry_plans(
     }
 
 
+def eod_plan_universe_tickers(
+    snapshot: dict[str, Any],
+    *,
+    max_price: float,
+    limit: int = 20,
+) -> list[str]:
+    output: list[str] = []
+    for plan in (snapshot.get("plans") or [])[: max(1, int(limit))]:
+        if not isinstance(plan, dict):
+            continue
+        ticker = str(plan.get("ticker") or "").upper().strip()
+        try:
+            eod_close = float(plan.get("eod_close"))
+        except (TypeError, ValueError):
+            continue
+        if not ticker or eod_close <= 0 or eod_close >= float(max_price):
+            continue
+        if ticker not in output:
+            output.append(ticker)
+    return output
+
+
 def _distance_to_zone_pct(price: float, plan: dict[str, Any]) -> float:
     lower = float(plan["entry_zone_lower"])
     upper = float(plan["entry_zone_upper"])
