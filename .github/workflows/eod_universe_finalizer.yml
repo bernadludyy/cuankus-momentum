@@ -4,11 +4,6 @@ on:
   schedule:
     # 17:00 WIB = 10:00 UTC, Monday-Friday.
     - cron: "0 10 * * 1-5"
-  # Bootstrap today's EOD cache when this workflow is first deployed to main.
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/eod_universe_finalizer.yml"
   workflow_dispatch:
     inputs:
       force:
