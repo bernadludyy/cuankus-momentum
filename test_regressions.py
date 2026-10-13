@@ -400,6 +400,32 @@ def test_live_reversal_rejects_weak_matched_flow_even_after_reclaim() -> None:
     assert result["cumulative_delta"] < 0
 
 
+def test_telegram_prefers_eod_plan_over_live_fallback() -> None:
+    text = format_alert(
+        {
+            "phase": "PRE_MOMENTUM",
+            "ticker": "TEST",
+            "price": 100,
+            "score": 70,
+            "quality_score": 75,
+            "transaction_value_ma50": 8_000_000_000,
+            "eod_entry_plan": {
+                "trade_date": "2026-10-12",
+                "setup_type": "PRE_BREAKOUT",
+                "eod_score": 78,
+                "entry_zone_lower": 94,
+                "entry_zone_upper": 96,
+                "reversal_trigger": 102,
+                "invalidation_price": 91,
+            },
+        }
+    )
+    assert "EOD ENTRY PLAN — PRE_BREAKOUT" in text
+    assert "Entry Zone: Rp94–Rp96" in text
+    assert "Live Trigger: reclaim ≥ Rp102" in text
+    assert "LIVE FALLBACK" not in text
+
+
 def test_rupiah_units_are_indonesian_and_directional_only_for_net() -> None:
     assert format_market_cap(806_680_000_000) == "Rp 806,68 Miliar"
     assert format_market_cap(1_240_000_000_000) == "Rp 1,24 Triliun"
@@ -989,6 +1015,7 @@ if __name__ == "__main__":
     test_live_reversal_matched_trades_are_deduplicated()
     test_live_reversal_requires_reclaim_and_matched_buyer_takeover()
     test_live_reversal_rejects_weak_matched_flow_even_after_reclaim()
+    test_telegram_prefers_eod_plan_over_live_fallback()
     test_rupiah_units_are_indonesian_and_directional_only_for_net()
     test_historical_alert_explains_missing_quality()
     test_tradeflow_replaces_golden_pocket_in_telegram()
