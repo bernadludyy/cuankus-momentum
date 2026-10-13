@@ -94,6 +94,8 @@ from scanner.liquidity_observer import build_dynamic_liquidity_observation
 from scanner.entry_setup import build_pullback_reversal_entry
 from scanner.reversal_live import evaluate_live_reversal_watch
 from scanner.eod_plan_live import (
+    load_eod_entry_plans,
+    eod_plan_universe_tickers,
     seed_eod_entry_watches,
     prioritize_reversal_watches,
 )
@@ -1397,11 +1399,35 @@ def run_once() -> None:
         print(f"[WARN] dynamic discovery gagal: {exc}")
         active_tickers = []
 
-    tickers = list(dict.fromkeys(static_tickers + active_tickers))
+    eod_plan_tickers: list[str] = []
+    if EOD_ENTRY_ENGINE_ENABLED:
+        try:
+            eod_snapshot = load_eod_entry_plans()
+            eod_plan_tickers = eod_plan_universe_tickers(
+                eod_snapshot,
+                max_price=MAX_ALERT_PRICE,
+                limit=EOD_ENTRY_LIVE_PLAN_LIMIT,
+            )
+            print(
+                f"[EOD-ENTRY-UNIVERSE] trade_date={eod_snapshot.get('trade_date')} "
+                f"plans={len(eod_plan_tickers)}"
+            )
+        except Exception as exc:
+            print(
+                f"[EOD-ENTRY-UNIVERSE-WARN] "
+                f"{type(exc).__name__}: {str(exc)[:180]}"
+            )
+
+    tickers = list(
+        dict.fromkeys(
+            static_tickers + active_tickers + eod_plan_tickers
+        )
+    )
 
     print(
         f"Universe static={len(static_tickers)} "
         f"active={len(active_tickers)} "
+        f"eod={len(eod_plan_tickers)} "
         f"total={len(tickers)}"
     )
     print(f"Scanning {len(tickers)} ticker...")
