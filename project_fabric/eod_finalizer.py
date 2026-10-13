@@ -25,6 +25,12 @@ from .universe_intelligence import (
     history_features,
     summary_snapshot,
 )
+from .eod_entry_plan import (
+    EOD_PLAN_ENDPOINT,
+    EOD_PLAN_PARAMS,
+    build_eod_entry_plan,
+    build_plan_snapshot,
+)
 
 
 WIB = timezone(timedelta(hours=7))
@@ -273,6 +279,7 @@ def finalize_eod(
     skipped_short_history = 0
     failed = 0
     failures: list[str] = []
+    entry_plans: list[dict[str, Any]] = []
 
     for ticker, (history_payload, history_saved_at) in latest_history.items():
         summary_row = summary_rows.get(ticker)
@@ -305,6 +312,17 @@ def finalize_eod(
                 skipped_short_history += 1
                 continue
 
+            plan = build_eod_entry_plan(
+                ticker,
+                merged,
+                calculated,
+                trade_date=trade_date,
+                generated_at=now,
+            )
+            if plan is not None:
+                entry_plans.append(plan)
+                calculated["eod_entry_plan"] = plan
+
             calculated.update(
                 {
                     "eod_finalized": True,
@@ -326,6 +344,16 @@ def finalize_eod(
                     f"{ticker}:{type(exc).__name__}:{str(exc)[:120]}"
                 )
 
+    plan_snapshot = build_plan_snapshot(
+        entry_plans,
+        trade_date=trade_date,
+        generated_at=now,
+    )
+    cache.set(
+        _cache_key(EOD_PLAN_ENDPOINT, EOD_PLAN_PARAMS),
+        plan_snapshot,
+    )
+
     status = {
         "schema_version": 1,
         "status": "SUCCESS" if finalized > 0 and failed == 0 else "PARTIAL",
@@ -336,6 +364,7 @@ def finalize_eod(
         "summary_rows": len(summary_rows),
         "history_payloads": len(latest_history),
         "finalized": finalized,
+        "entry_plan_count": plan_snapshot.get("count", 0),
         "skipped_no_summary": skipped_no_summary,
         "skipped_short_history": skipped_short_history,
         "failed": failed,
@@ -356,6 +385,7 @@ def main() -> None:
         f"trade_date={result.get('trade_date')} "
         f"finalized={result.get('finalized', 0)} "
         f"failed={result.get('failed', 0)} "
+        f"plans={result.get('entry_plan_count', 0)} "
         f"zapi_calls={result.get('zapi_calls', 0)}"
     )
     if result.get("failures"):
