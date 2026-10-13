@@ -183,7 +183,11 @@ ENTRY_MIN_BID_PERCENT = float(
 REVERSAL_LIVE_ENABLED = os.getenv(
     "REVERSAL_LIVE_ENABLED", "true"
 ).lower() in {"1", "true", "yes", "y"}
-REVERSAL_WATCH_MINUTES = int(os.getenv("REVERSAL_WATCH_MINUTES", "360"))
+EOD_ENTRY_ENGINE_ENABLED = os.getenv(
+    "EOD_ENTRY_ENGINE_ENABLED", "true"
+).lower() in {"1", "true", "yes", "y"}
+EOD_ENTRY_LIVE_PLAN_LIMIT = int(os.getenv("EOD_ENTRY_LIVE_PLAN_LIMIT", "20"))
+REVERSAL_WATCH_MINUTES = int(os.getenv("REVERSAL_WATCH_MINUTES", "480"))
 REVERSAL_MAX_WATCHES = int(os.getenv("REVERSAL_MAX_WATCHES", "3"))
 REVERSAL_CONFIRM_SCORE = float(os.getenv("REVERSAL_CONFIRM_SCORE", "80"))
 REVERSAL_BUILDING_SCORE = float(os.getenv("REVERSAL_BUILDING_SCORE", "70"))

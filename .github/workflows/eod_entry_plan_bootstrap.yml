@@ -1,0 +1,46 @@
+name: Bot 4 EOD Entry Plan Bootstrap
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "project_fabric/eod_entry_plan.py"
+      - "project_fabric/eod_plan_bootstrap.py"
+      - "project_fabric/eod_finalizer.py"
+      - "scanner/eod_plan_live.py"
+      - ".github/workflows/eod_entry_plan_bootstrap.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cuankus-momentum-eod-plan-bootstrap
+  cancel-in-progress: true
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PROJECT_FABRIC_DATABASE_URL: ${{ secrets.PROJECT_FABRIC_DATABASE_URL }}
+      PROJECT_FABRIC_CACHE_NAMESPACE: shared-v1
+      PROJECT_FABRIC_DB_REQUIRED: "true"
+      EOD_ENTRY_MIN_SCORE: "50"
+      EOD_ENTRY_MAX_PLANS: "20"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile entry engines
+        run: python -m py_compile project_fabric/eod_entry_plan.py project_fabric/eod_plan_bootstrap.py scanner/eod_plan_live.py
+
+      - name: Bootstrap latest finalized EOD plan
+        run: python -m project_fabric.eod_plan_bootstrap

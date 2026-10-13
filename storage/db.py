@@ -952,6 +952,11 @@ def upsert_reversal_watch(
             last_eval_ts = excluded.last_eval_ts,
             confirmed_ts = NULL,
             cancelled_ts = NULL
+        WHERE NOT (
+            reversal_watches.source_lane LIKE 'EOD_%'
+            AND excluded.source_lane NOT LIKE 'EOD_%'
+            AND reversal_watches.state IN ('WAIT_PULLBACK', 'PULLBACK_ACTIVE')
+        )
         """,
         (
             ticker.upper(),
@@ -1128,6 +1133,11 @@ def ensure_reversal_watch(
             confirmed_ts = NULL,
             cancelled_ts = NULL
         WHERE reversal_watches.alert_ts < excluded.alert_ts
+          AND NOT (
+              reversal_watches.source_lane LIKE 'EOD_%'
+              AND excluded.source_lane NOT LIKE 'EOD_%'
+              AND reversal_watches.state IN ('WAIT_PULLBACK', 'PULLBACK_ACTIVE')
+          )
         """,
         (
             ticker.upper(),

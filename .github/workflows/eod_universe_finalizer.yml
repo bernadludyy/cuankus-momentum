@@ -4,11 +4,6 @@ on:
   schedule:
     # 17:00 WIB = 10:00 UTC, Monday-Friday.
     - cron: "0 10 * * 1-5"
-  # Bootstrap today's EOD cache when this workflow is first deployed to main.
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/eod_universe_finalizer.yml"
   workflow_dispatch:
     inputs:
       force:
@@ -32,6 +27,8 @@ jobs:
       PROJECT_FABRIC_CACHE_NAMESPACE: shared-v1
       PROJECT_FABRIC_DB_REQUIRED: "true"
       EOD_FINALIZER_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || 'false' }}
+      EOD_ENTRY_MIN_SCORE: "50"
+      EOD_ENTRY_MAX_PLANS: "20"
 
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +41,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile EOD finalizer
-        run: python -m py_compile project_fabric/eod_finalizer.py project_fabric/universe_intelligence.py
+        run: python -m py_compile project_fabric/eod_finalizer.py project_fabric/eod_entry_plan.py project_fabric/universe_intelligence.py
 
       - name: Finalize completed IDX session
         run: python -m project_fabric.eod_finalizer

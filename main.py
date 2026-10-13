@@ -52,6 +52,8 @@ from config import (
     QUALITY_SCORE_ENABLED,
     ENTRY_SETUP_ENABLED,
     REVERSAL_LIVE_ENABLED,
+    EOD_ENTRY_ENGINE_ENABLED,
+    EOD_ENTRY_LIVE_PLAN_LIMIT,
     REVERSAL_WATCH_MINUTES,
     REVERSAL_MAX_WATCHES,
     TOP_MOVER_COUNT,
@@ -91,6 +93,10 @@ from scanner.quality import build_quality_metrics
 from scanner.liquidity_observer import build_dynamic_liquidity_observation
 from scanner.entry_setup import build_pullback_reversal_entry
 from scanner.reversal_live import evaluate_live_reversal_watch
+from scanner.eod_plan_live import (
+    seed_eod_entry_watches,
+    prioritize_reversal_watches,
+)
 from scanner.microstructure import (
     apply_micro_confirmation,
     apply_relaxed_micro_confirmation,
@@ -1146,9 +1152,16 @@ def bootstrap_reversal_watches_from_recent_alerts() -> int:
 def format_live_reversal_confirmed(result: dict) -> str:
     delta_flip = "YES ✅" if result.get("delta_flip") else "NO"
     absorption = "CONFIRMED ✅" if result.get("selling_absorption_live") else "WATCH"
+    source_lane = str(result.get("source_lane") or "POST-ALERT WATCH")
+    setup_origin = (
+        "EOD PLAN + LIVE CONFIRMATION"
+        if source_lane.startswith("EOD_")
+        else "LIVE MOMENTUM FALLBACK"
+    )
     return (
-        "✅ BOT 4 — REVERSAL ENTRY CONFIRMED\n"
-        f"{result.get('source_lane') or 'POST-ALERT WATCH'}\n"
+        "✅ BOT 4 — ENTRY CONFIRMED\n"
+        f"{setup_origin}\n"
+        f"{source_lane}\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"📌 {result['ticker']} | {format_price(result.get('current_price'))}\n"
         f"⭐ Live Reversal Score: {format_num(result.get('score'), '/100')}\n\n"
@@ -1194,13 +1207,34 @@ def run_live_reversal_engine(quotes: list[dict]) -> None:
     if not REVERSAL_LIVE_ENABLED:
         return
 
+    eod_seed = None
+    if EOD_ENTRY_ENGINE_ENABLED:
+        try:
+            eod_seed = seed_eod_entry_watches(
+                quotes,
+                max_price=MAX_ALERT_PRICE,
+                max_plans=EOD_ENTRY_LIVE_PLAN_LIMIT,
+            )
+            print(
+                f"[EOD-ENTRY] trade_date={eod_seed.get('trade_date')} "
+                f"available={eod_seed.get('available', 0)} "
+                f"near_zone={eod_seed.get('near_zone', 0)} "
+                f"seeded={eod_seed.get('seeded', 0)}"
+            )
+        except Exception as exc:
+            print(
+                f"[EOD-ENTRY-WARN] {type(exc).__name__}: {str(exc)[:180]}"
+            )
+
+    # Live alerts remain a fallback. Active EOD watches are protected from being
+    # overwritten by same-day 1-2 tick live plans.
     bootstrap_reversal_watches_from_recent_alerts()
     watches = get_active_reversal_watches(
         max_age_minutes=REVERSAL_WATCH_MINUTES,
-        limit=REVERSAL_MAX_WATCHES,
+        limit=max(50, EOD_ENTRY_LIVE_PLAN_LIMIT + 20),
     )
     if not watches:
-        print("[REVERSAL-LIVE] no active post-alert watch")
+        print("[REVERSAL-LIVE] no active EOD/live watch")
         return
 
     price_by_ticker = {
@@ -1208,15 +1242,15 @@ def run_live_reversal_engine(quotes: list[dict]) -> None:
         for item in quotes
         if item.get("ticker")
     }
-    executable = [
-        watch
-        for watch in watches
-        if price_by_ticker.get(str(watch["ticker"]).upper()) is not None
-    ]
+    executable = prioritize_reversal_watches(
+        watches,
+        price_by_ticker,
+        limit=REVERSAL_MAX_WATCHES,
+    )
 
     print(
         f"[REVERSAL-LIVE] active={len(watches)} "
-        f"priced={len(executable)} max={REVERSAL_MAX_WATCHES}"
+        f"selected={len(executable)} max_micro={REVERSAL_MAX_WATCHES}"
     )
     if not executable:
         return
