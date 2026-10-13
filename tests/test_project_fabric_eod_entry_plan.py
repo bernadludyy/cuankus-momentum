@@ -7,7 +7,10 @@ from project_fabric.eod_entry_plan import (
     build_eod_entry_plan,
     build_plan_snapshot,
 )
-from scanner.eod_plan_live import prioritize_reversal_watches
+from scanner.eod_plan_live import (
+    eod_plan_universe_tickers,
+    prioritize_reversal_watches,
+)
 
 
 WIB = timezone(timedelta(hours=7))
@@ -100,6 +103,33 @@ class EODEntryPlanTests(unittest.TestCase):
         self.assertIsNotNone(plan)
         self.assertEqual(plan["setup_type"], "BREAKOUT_PULLBACK")
         self.assertGreater(plan["reversal_trigger"], plan["prior_20d_high"])
+
+    def test_eod_plan_respects_market_cap_guardrail(self):
+        plan = build_eod_entry_plan(
+            "TEST",
+            history_payload(breakout=False),
+            intelligence(breakout=False),
+            trade_date="2026-10-12",
+            generated_at=datetime(2026, 10, 12, 17, 0, tzinfo=WIB),
+            summary_row={"ListedShares": 10_000},
+        )
+        self.assertIsNone(plan)
+
+    def test_live_universe_includes_only_bot4_price_plans(self):
+        snapshot = {
+            "plans": [
+                {"ticker": "LOW", "eod_close": 120},
+                {"ticker": "EDGE", "eod_close": 499},
+                {"ticker": "HIGH", "eod_close": 500},
+                {"ticker": "ASII", "eod_close": 4810},
+            ]
+        }
+        tickers = eod_plan_universe_tickers(
+            snapshot,
+            max_price=500,
+            limit=20,
+        )
+        self.assertEqual(tickers, ["LOW", "EDGE"])
 
     def test_plan_snapshot_ranks_and_caps(self):
         plans = [
