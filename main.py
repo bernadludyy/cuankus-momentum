@@ -805,6 +805,23 @@ def _format_entry_setup(result: dict) -> str:
     if not ENTRY_SETUP_ENABLED:
         return ""
 
+    eod_plan = result.get("eod_entry_plan")
+    if isinstance(eod_plan, dict):
+        return (
+            f"🌙 EOD ENTRY PLAN — {eod_plan.get('setup_type') or 'SETUP'}\n"
+            f"• EOD Date: {eod_plan.get('trade_date') or '-'} "
+            f"| Score: {format_num(eod_plan.get('eod_score'), '/100')}\n"
+            f"• Entry Zone: "
+            f"{format_price(eod_plan.get('entry_zone_lower'))}–"
+            f"{format_price(eod_plan.get('entry_zone_upper'))}\n"
+            f"• Live Trigger: reclaim ≥ "
+            f"{format_price(eod_plan.get('reversal_trigger'))}\n"
+            f"• Invalidation: < "
+            f"{format_price(eod_plan.get('invalidation_price'))}\n"
+            "• Live Confirm: tunggu matched-flow (CVD, buyer ratio, "
+            "absorption, bid) sebelum entry"
+        )
+
     setup = build_pullback_reversal_entry(result)
     if setup is None:
         return ""
@@ -817,7 +834,7 @@ def _format_entry_setup(result: dict) -> str:
     )
 
     return (
-        "🎯 ENTRY REVERSAL / PULLBACK\n"
+        "🎯 ENTRY REVERSAL / PULLBACK — LIVE FALLBACK\n"
         f"• Pullback Area: "
         f"{format_price(setup.get('pullback_lower'))}–"
         f"{format_price(setup.get('pullback_upper'))}\n"
@@ -826,7 +843,7 @@ def _format_entry_setup(result: dict) -> str:
         f"• Buyer Confirm: {setup.get('entry_confirmation')}\n"
         f"• Invalidation: < {format_price(setup.get('invalidation_price'))} "
         f"atau selling pressure membesar\n"
-        "• Eksekusi: tunggu area pullback disentuh lalu buyer kembali dominan"
+        "• Eksekusi: fallback intraday; tunggu buyer kembali dominan"
     )
 
 
@@ -1400,9 +1417,15 @@ def run_once() -> None:
         active_tickers = []
 
     eod_plan_tickers: list[str] = []
+    eod_plan_by_ticker: dict[str, dict] = {}
     if EOD_ENTRY_ENGINE_ENABLED:
         try:
             eod_snapshot = load_eod_entry_plans()
+            eod_plan_by_ticker = {
+                str(plan.get("ticker") or "").upper(): plan
+                for plan in (eod_snapshot.get("plans") or [])
+                if isinstance(plan, dict) and plan.get("ticker")
+            }
             eod_plan_tickers = eod_plan_universe_tickers(
                 eod_snapshot,
                 max_price=MAX_ALERT_PRICE,
@@ -1468,6 +1491,10 @@ def run_once() -> None:
         if not result:
             evaluation_status[ticker] = "NOT_EVALUATED"
             continue
+
+        eod_plan = eod_plan_by_ticker.get(ticker)
+        if isinstance(eod_plan, dict):
+            result["eod_entry_plan"] = eod_plan
 
         result.update(
             build_foreign_metrics(
