@@ -1,0 +1,71 @@
+name: IDX Fundamental Backfill
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "project_fabric/fundamental_archive.py"
+      - "project_fabric/fundamental_backfill.py"
+      - "tests/test_project_fabric_fundamentals.py"
+      - ".github/workflows/fundamental_backfill.yml"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Maximum tickers; 0 means all eligible"
+        required: false
+        default: "0"
+      workers:
+        description: "Concurrent tickers (1-8)"
+        required: false
+        default: "4"
+      stale_days:
+        description: "Refresh data older than this many days"
+        required: false
+        default: "90"
+      force:
+        description: "Refresh even when a complete row is still fresh"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: idx-fundamental-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PROJECT_FABRIC_DATABASE_URL: ${{ secrets.PROJECT_FABRIC_DATABASE_URL }}
+      PROJECT_FABRIC_DB_REQUIRED: "true"
+      ZPI_API_KEY: ${{ secrets.ZPI_API_KEY }}
+      ZPI_BASE_URL: https://api.zapi.ink/v1/finance:pluang
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Fundamental parser regression tests
+        env:
+          PROJECT_FABRIC_DATABASE_URL: ""
+          ZPI_API_KEY: ""
+        run: python -m unittest tests.test_project_fabric_fundamentals -v
+      - name: Backfill fundamental warehouse
+        run: |
+          ARGS=(
+            --limit "${{ github.event.inputs.limit || '0' }}"
+            --workers "${{ github.event.inputs.workers || '4' }}"
+            --stale-days "${{ github.event.inputs.stale_days || '90' }}"
+          )
+          if [[ "${{ github.event.inputs.force || 'false' }}" == "true" ]]; then
+            ARGS+=(--force)
+          fi
+          python -m project_fabric.fundamental_backfill "${ARGS[@]}"
+
