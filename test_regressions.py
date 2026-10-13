@@ -553,6 +553,71 @@ def test_quality_score_and_selling_absorption() -> None:
     assert 70 <= quality["quality_score"] <= 100, quality
 
 
+def test_active_eod_watch_is_not_overwritten_by_live_fallback() -> None:
+    original_path = db.DB_PATH
+    try:
+        with tempfile.TemporaryDirectory() as root:
+            db.DB_PATH = Path(root) / "entry-engine.db"
+            db.init_db()
+            db.upsert_reversal_watch(
+                ticker="TEST",
+                source_lane="EOD_PRE_BREAKOUT",
+                source_phase="EOD_PLAN",
+                target="all",
+                alert_price=100,
+                pullback_lower=96,
+                pullback_upper=98,
+                reversal_trigger=102,
+                invalidation_price=94,
+                alert_ts="2026-10-13T08:59:00+07:00",
+            )
+            db.upsert_reversal_watch(
+                ticker="TEST",
+                source_lane="FILTER1_STRICT",
+                source_phase="PRE_MOMENTUM",
+                target="all",
+                alert_price=105,
+                pullback_lower=103,
+                pullback_upper=104,
+                reversal_trigger=105,
+                invalidation_price=102,
+                alert_ts="2026-10-13T10:00:00+07:00",
+            )
+            con = db.connect()
+            row = con.execute(
+                "SELECT source_lane, pullback_lower, reversal_trigger "
+                "FROM reversal_watches WHERE ticker='TEST'"
+            ).fetchone()
+            con.close()
+            assert row["source_lane"] == "EOD_PRE_BREAKOUT"
+            assert row["pullback_lower"] == 96
+            assert row["reversal_trigger"] == 102
+
+            db.update_reversal_watch("TEST", state="CANCELLED")
+            db.upsert_reversal_watch(
+                ticker="TEST",
+                source_lane="FILTER1_STRICT",
+                source_phase="PRE_MOMENTUM",
+                target="all",
+                alert_price=105,
+                pullback_lower=103,
+                pullback_upper=104,
+                reversal_trigger=105,
+                invalidation_price=102,
+                alert_ts="2026-10-13T10:05:00+07:00",
+            )
+            con = db.connect()
+            row = con.execute(
+                "SELECT source_lane, pullback_lower FROM reversal_watches "
+                "WHERE ticker='TEST'"
+            ).fetchone()
+            con.close()
+            assert row["source_lane"] == "FILTER1_STRICT"
+            assert row["pullback_lower"] == 103
+    finally:
+        db.DB_PATH = original_path
+
+
 def test_daily_filter_cache_roundtrip_includes_value_ma50() -> None:
     original_path = db.DB_PATH
     try:
@@ -930,6 +995,7 @@ if __name__ == "__main__":
     test_dynamic_liquidity_observer_is_tiered_and_observational()
     test_filter1_value_ma50_gate_and_top_n_ranking()
     test_quality_score_and_selling_absorption()
+    test_active_eod_watch_is_not_overwritten_by_live_fallback()
     test_daily_filter_cache_roundtrip_includes_value_ma50()
     test_golden_pocket_from_recent_bullish_swing()
     test_filter2_relaxed_can_confirm_before_filter1()
