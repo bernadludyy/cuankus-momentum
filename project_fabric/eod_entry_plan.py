@@ -15,6 +15,13 @@ EOD_PLAN_TTL_SECONDS = 4 * 24 * 3600
 
 EOD_ENTRY_MIN_SCORE = float(os.getenv("EOD_ENTRY_MIN_SCORE", "50"))
 EOD_ENTRY_MAX_PLANS = int(os.getenv("EOD_ENTRY_MAX_PLANS", "20"))
+EOD_ENTRY_MAX_PRICE = float(os.getenv("EOD_ENTRY_MAX_PRICE", "500"))
+EOD_ENTRY_MIN_MARKET_CAP_IDR = float(
+    os.getenv("EOD_ENTRY_MIN_MARKET_CAP_IDR", "100000000000")
+)
+EOD_ENTRY_MAX_MARKET_CAP_IDR = float(
+    os.getenv("EOD_ENTRY_MAX_MARKET_CAP_IDR", "10000000000000")
+)
 
 
 def _clamp(value: float) -> float:
@@ -75,6 +82,7 @@ def build_eod_entry_plan(
     *,
     trade_date: str,
     generated_at: datetime | None = None,
+    summary_row: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     rows = _history(
         history_payload,
@@ -156,6 +164,27 @@ def build_eod_entry_plan(
         return None
 
     close = float(last["close"])
+
+    # EOD setup engine follows the same broad Bot 4 universe guardrails.
+    if close >= EOD_ENTRY_MAX_PRICE:
+        return None
+
+    market_cap = None
+    if isinstance(summary_row, dict):
+        listed = None
+        for key in ("ListedShares", "listedShares", "SharesOutstanding"):
+            listed = _num(summary_row.get(key))
+            if listed is not None:
+                break
+        if listed is not None and listed > 0:
+            market_cap = close * listed
+            if not (
+                EOD_ENTRY_MIN_MARKET_CAP_IDR
+                <= market_cap
+                <= EOD_ENTRY_MAX_MARKET_CAP_IDR
+            ):
+                return None
+
     tick = _tick_size(close)
 
     if setup_type == "BREAKOUT_PULLBACK":
@@ -203,6 +232,7 @@ def build_eod_entry_plan(
         "eod_score": round(eod_score, 1),
         "status": _status(eod_score),
         "eod_close": close,
+        "market_cap": round(market_cap, 2) if market_cap is not None else None,
         "entry_zone_lower": float(zone_lower),
         "entry_zone_upper": float(zone_upper),
         "reversal_trigger": float(trigger),

@@ -318,6 +318,7 @@ def finalize_eod(
                 calculated,
                 trade_date=trade_date,
                 generated_at=now,
+                summary_row=summary_row,
             )
             if plan is not None:
                 entry_plans.append(plan)
