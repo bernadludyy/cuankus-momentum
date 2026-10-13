@@ -2,12 +2,19 @@ name: Bot 4 EOD Universe Finalizer
 
 on:
   schedule:
-    # 17:00 WIB = 10:00 UTC, Monday-Friday.
-    - cron: "0 10 * * 1-5"
+    # 17:05, 17:20, 17:40 and 18:00 WIB. Later attempts are no-ops after success.
+    - cron: "5,20,40 10 * * 1-5"
+    - cron: "0 11 * * 1-5"
+  push:
+    branches: [main]
+    paths:
+      - 'project_fabric/eod_finalizer.py'
+      - 'project_fabric/market_archive.py'
+      - '.github/workflows/eod_universe_finalizer.yml'
   workflow_dispatch:
     inputs:
       force:
-        description: "Allow manual run before 17:00 WIB / weekend"
+        description: "Refresh again after success (still requires 17:00 WIB)"
         required: false
         default: "false"
 
@@ -16,7 +23,7 @@ permissions:
 
 concurrency:
   group: cuankus-momentum-eod-finalizer
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   finalize:
@@ -26,6 +33,8 @@ jobs:
       PROJECT_FABRIC_DATABASE_URL: ${{ secrets.PROJECT_FABRIC_DATABASE_URL }}
       PROJECT_FABRIC_CACHE_NAMESPACE: shared-v1
       PROJECT_FABRIC_DB_REQUIRED: "true"
+      ZPI_API_KEY: ${{ secrets.ZPI_API_KEY }}
+      ZPI_IDX_BASE_URL: https://api.zapi.ink/v1/finance:idx
       EOD_FINALIZER_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || 'false' }}
       EOD_ENTRY_MIN_SCORE: "50"
       EOD_ENTRY_MAX_PLANS: "20"
@@ -43,5 +52,14 @@ jobs:
       - name: Compile EOD finalizer
         run: python -m py_compile project_fabric/eod_finalizer.py project_fabric/eod_entry_plan.py project_fabric/universe_intelligence.py
 
+      - name: EOD regression tests before refresh
+        env:
+          PROJECT_FABRIC_DATABASE_URL: ""
+          PROJECT_FABRIC_DB_REQUIRED: "false"
+          PROJECT_FABRIC_INTEGRATION_TESTS: "0"
+          ZPI_API_KEY: ""
+        run: python -m unittest discover -s tests -p 'test_project_fabric_eod*.py' -v
+
       - name: Finalize completed IDX session
         run: python -m project_fabric.eod_finalizer
+
