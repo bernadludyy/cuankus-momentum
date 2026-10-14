@@ -5,6 +5,7 @@ import time
 
 from bot.notifier import send_telegram
 from scanner.top_gainer import NeonDailyDelivery, send_daily_top_gainers
+from scanner.top_gainer_potential import POTENTIAL_NAMESPACE, send_daily_potential
 from datetime import datetime
 from scanner.ptsn_structure import build_ptsn_structure, format_ptsn_structure
 from project_fabric.observability import ObservabilityClient
@@ -25,6 +26,9 @@ from config import (
     TOP_GAINER_MIN_COVERAGE,
     TOP_GAINER_SEND_AFTER_HOUR,
     TOP_GAINER_TARGET,
+    TOP_GAINER_POTENTIAL_ENABLED,
+    TOP_GAINER_POTENTIAL_COUNT,
+    TOP_GAINER_POTENTIAL_SEND_AFTER_HOUR,
     PTSN_STRUCTURE_ENABLED,
     PTSN_STRUCTURE_COOLDOWN_MINUTES,
     PTSN_STRUCTURE_MAX_ALERTS_PER_CYCLE,
@@ -1538,6 +1542,25 @@ def run_once() -> None:
             f"vol={result.get('volume_spike')} "
             f"freq={result.get('frequency_spike')}"
         )
+
+    # Separate private-only potential watch: use existing analyzed scanner data,
+    # never request any additional ZAPI endpoint or live orderbook call.
+    if TOP_GAINER_POTENTIAL_ENABLED:
+        try:
+            potential_status = send_daily_potential(
+                quotes,
+                analyzed,
+                summary_payload=shared_market_payload,
+                when=datetime.now().astimezone(),
+                sender=send_telegram,
+                store=NeonDailyDelivery(namespace=POTENTIAL_NAMESPACE),
+                snapshot_loader=lambda code: get_recent_snapshots(code, RECENT_SNAPSHOTS),
+                count=TOP_GAINER_POTENTIAL_COUNT,
+                after_hour=TOP_GAINER_POTENTIAL_SEND_AFTER_HOUR,
+            )
+            print(f"[TOP-GAINER-POTENTIAL] {potential_status}")
+        except Exception as exc:
+            print(f"[TOP-GAINER-POTENTIAL-WARN] {type(exc).__name__}: {str(exc)[:160]}")
 
     # Build pools before allocating microstructure slots. Tickers that qualify
     # for a pool but lose a slot are PENDING_MICRO, not NO_SIGNAL.
