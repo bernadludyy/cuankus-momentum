@@ -141,7 +141,7 @@ class TopGainerTests(unittest.TestCase):
                                         sender=lambda *_args, **_kwargs: {"ok": False})
         self.assertEqual(status, "telegram_failed_retryable")
         self.assertEqual(send_daily_top_gainers(self.data, when=self.when, store=store,
-                                                sender=lambda *_args, **_kwargs: {"ok": True}), "sent:3")
+                                                sender=lambda *_args, **_kwargs: {"ok": True}), "sent:3:scope=idx")
 
     @unittest.skipUnless(os.getenv("PROJECT_FABRIC_INTEGRATION_TESTS") == "1",
                          "requires Postgres integration environment")
