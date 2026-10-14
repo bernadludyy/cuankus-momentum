@@ -122,7 +122,6 @@ from storage.db import (
     get_cached_shareholder_filter,
     get_recent_snapshots,
     get_cached_market_cap,
-
     init_db,
     save_daily_filter,
     save_market_cap,
