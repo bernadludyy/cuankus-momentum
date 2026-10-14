@@ -136,6 +136,7 @@ from storage.db import (
     ensure_reversal_watch,
     get_active_reversal_watches,
     get_recent_alert_seeds,
+    cancel_filter2_reversal_watches,
     update_reversal_watch,
     now_wib_iso,
 )
@@ -1112,9 +1113,6 @@ def bootstrap_reversal_watches_from_recent_alerts() -> int:
                                 "EARLY_IGNITION",
                                 "PRE_MOMENTUM",
                                 "POWERFUL_MOMENTUM",
-                                "FILTER2_EARLY_IGNITION",
-                                "FILTER2_PRE_MOMENTUM",
-                                "FILTER2_POWERFUL_MOMENTUM",
                             ],
                             REVERSAL_WATCH_MINUTES,
                             limit,
@@ -1236,6 +1234,13 @@ def format_live_reversal_cancelled(result: dict, watch: dict) -> str:
 def run_live_reversal_engine(quotes: list[dict]) -> None:
     if not REVERSAL_LIVE_ENABLED:
         return
+
+    retired_filter2 = cancel_filter2_reversal_watches()
+    if retired_filter2:
+        print(
+            f"[FILTER2-RETIRED] cancelled_legacy_reversal_watches="
+            f"{retired_filter2}"
+        )
 
     eod_seed = None
     if EOD_ENTRY_ENGINE_ENABLED:
@@ -2068,7 +2073,7 @@ def run_once() -> None:
         )
         delivery = send_telegram(
             format_alert(result, rank=rank),
-            target="private" if ticker == "PTSN" else "all",
+            target="group",
         )
         delivery_ok = bool(delivery.get("ok"))
         _OBS.record_delivery(
@@ -2092,7 +2097,7 @@ def run_once() -> None:
             register_reversal_watch_from_result(
                 result,
                 lane="FILTER1_STRICT",
-                target="private" if ticker == "PTSN" else "all",
+                target="group",
             )
             print(
                 f"[ALERT] #{rank} {ticker} "
@@ -2105,12 +2110,17 @@ def run_once() -> None:
                 "tidak dinaikkan."
             )
 
-    # Filter 2 has its own cooldown/state and never changes Filter 1 phase state.
-    filter2_candidates = sorted(
-        processed_filter2_fallback,
-        key=_quality_sort_key,
-        reverse=True,
-    )[:FILTER2_RESERVED_SLOTS]
+    # Filter 2 is production-disabled. Keep this lane hard-gated so legacy
+    # data or future refactors cannot send Filter 2 to either Telegram target.
+    filter2_candidates = (
+        sorted(
+            processed_filter2_fallback,
+            key=_quality_sort_key,
+            reverse=True,
+        )[:FILTER2_RESERVED_SLOTS]
+        if FILTER2_ENABLED
+        else []
+    )
 
     for rank, result in enumerate(filter2_candidates, start=1):
         ticker = result["ticker"]

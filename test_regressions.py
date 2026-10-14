@@ -644,6 +644,54 @@ def test_active_eod_watch_is_not_overwritten_by_live_fallback() -> None:
         db.DB_PATH = original_path
 
 
+def test_filter2_legacy_reversal_watch_is_cancelled() -> None:
+    original_path = db.DB_PATH
+    try:
+        with tempfile.TemporaryDirectory() as root:
+            db.DB_PATH = Path(root) / "filter2-retired.db"
+            db.init_db()
+            db.upsert_reversal_watch(
+                ticker="F2OLD",
+                source_lane="FILTER2_RELAXED",
+                source_phase="PRE_MOMENTUM",
+                target="all",
+                alert_price=100,
+                pullback_lower=98,
+                pullback_upper=99,
+                reversal_trigger=100,
+                invalidation_price=97,
+                alert_ts=datetime.now(WIB).isoformat(),
+            )
+            db.upsert_reversal_watch(
+                ticker="F1KEEP",
+                source_lane="FILTER1_STRICT",
+                source_phase="PRE_MOMENTUM",
+                target="group",
+                alert_price=100,
+                pullback_lower=98,
+                pullback_upper=99,
+                reversal_trigger=100,
+                invalidation_price=97,
+                alert_ts=datetime.now(WIB).isoformat(),
+            )
+
+            changed = db.cancel_filter2_reversal_watches()
+            assert changed == 1
+
+            con = db.connect()
+            rows = {
+                row["ticker"]: row["state"]
+                for row in con.execute(
+                    "SELECT ticker, state FROM reversal_watches"
+                ).fetchall()
+            }
+            con.close()
+            assert rows["F2OLD"] == "CANCELLED"
+            assert rows["F1KEEP"] == "WAIT_PULLBACK"
+    finally:
+        db.DB_PATH = original_path
+
+
 def test_daily_filter_cache_roundtrip_includes_value_ma50() -> None:
     original_path = db.DB_PATH
     try:
@@ -983,6 +1031,9 @@ def test_ptsn_private_routing_never_reaches_group() -> None:
         result = notifier.send_telegram("PTSN private", target="private")
         assert result["ok"] and recipients == ["user-private-test"], recipients
         recipients.clear()
+        result = notifier.send_telegram("Filter 1 strict", target="group")
+        assert result["ok"] and recipients == ["group-test"], recipients
+        recipients.clear()
         notifier.send_telegram("regular signal")
         assert recipients == ["user-private-test", "group-test"], recipients
         try:
@@ -1031,6 +1082,7 @@ if __name__ == "__main__":
     test_filter1_value_ma50_gate_and_top_n_ranking()
     test_quality_score_and_selling_absorption()
     test_active_eod_watch_is_not_overwritten_by_live_fallback()
+    test_filter2_legacy_reversal_watch_is_cancelled()
     test_daily_filter_cache_roundtrip_includes_value_ma50()
     test_golden_pocket_from_recent_bullish_swing()
     test_filter2_relaxed_can_confirm_before_filter1()
