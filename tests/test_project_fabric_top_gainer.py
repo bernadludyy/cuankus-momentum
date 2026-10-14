@@ -8,6 +8,7 @@ from scanner.top_gainer import (
     NeonDailyDelivery,
     format_top_gainer_report,
     rank_top_gainers,
+    rank_live_scan_gainers,
     send_daily_top_gainers,
 )
 
@@ -71,8 +72,38 @@ class TopGainerTests(unittest.TestCase):
         self.assertEqual(
             send_daily_top_gainers(summary(date(2026, 10, 13)), when=self.when, store=FakeStore(),
                                    sender=lambda *_args, **_kwargs: self.fail("must not send")),
-            "invalid_or_stale_summary:coverage=0",
+            "invalid_or_stale_summary_and_scan:coverage=0",
         )
+
+    def test_stale_summary_uses_only_preexisting_live_quotes(self):
+        stale = summary(date(2026, 10, 13))
+        quotes = [{"ticker": f"S{i:04d}", "last": 102, "prev_close": 100} for i in range(40)]
+        quotes[0] = {"ticker": "SONA", "last": 3520, "prev_close": None}
+        ranked, coverage = rank_live_scan_gainers(
+            quotes, summary_payload=stale, trade_date=self.when.date(),
+        )
+        self.assertEqual(coverage, 40)
+        self.assertEqual(ranked[0]["ticker"], "SONA")
+        self.assertIsNone(ranked[0]["value"])
+        store = FakeStore()
+        messages = []
+        status = send_daily_top_gainers(stale, when=self.when, fallback_quotes=quotes,
+                                        sender=lambda message, **kwargs: messages.append(message) or {"ok": True},
+                                        store=store)
+        self.assertEqual(status, "sent:10:scope=scanner")
+        self.assertIn("TOP GAINER UNIVERSE SCANNER", messages[0])
+        self.assertIn("BUKAN ranking seluruh BEI", messages[0])
+        self.assertNotIn("Nilai transaksi:", messages[0])
+        self.assertEqual(send_daily_top_gainers(stale, when=self.when, fallback_quotes=quotes,
+                                                sender=lambda *_a, **_k: self.fail("repeat"),
+                                                store=store), "already_sent_or_claimed")
+
+    def test_stale_summary_with_inadequate_quotes_fails_closed(self):
+        stale = summary(date(2026, 10, 13))
+        status = send_daily_top_gainers(stale, when=self.when,
+            fallback_quotes=[{"ticker": "SONA", "last": 3520, "prev_close": 3450}],
+            sender=lambda *_a, **_k: self.fail("must not send"), store=FakeStore())
+        self.assertEqual(status, "invalid_or_stale_summary_and_scan:coverage=1")
 
     def test_bad_prices_and_no_trade_ignored(self):
         data = summary()
@@ -96,7 +127,7 @@ class TopGainerTests(unittest.TestCase):
             send_daily_top_gainers(self.data, when=self.when.replace(hour=9), store=store, sender=send),
             "outside_delivery_window",
         )
-        self.assertEqual(send_daily_top_gainers(self.data, when=self.when, store=store, sender=send), "sent:3")
+        self.assertEqual(send_daily_top_gainers(self.data, when=self.when, store=store, sender=send), "sent:3:scope=idx")
         self.assertEqual(
             send_daily_top_gainers(self.data, when=self.when + timedelta(minutes=5), store=store, sender=send),
             "already_sent_or_claimed",
@@ -110,7 +141,7 @@ class TopGainerTests(unittest.TestCase):
                                         sender=lambda *_args, **_kwargs: {"ok": False})
         self.assertEqual(status, "telegram_failed_retryable")
         self.assertEqual(send_daily_top_gainers(self.data, when=self.when, store=store,
-                                                sender=lambda *_args, **_kwargs: {"ok": True}), "sent:3")
+                                                sender=lambda *_args, **_kwargs: {"ok": True}), "sent:3:scope=idx")
 
     @unittest.skipUnless(os.getenv("PROJECT_FABRIC_INTEGRATION_TESTS") == "1",
                          "requires Postgres integration environment")
