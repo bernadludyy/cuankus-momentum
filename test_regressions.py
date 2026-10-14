@@ -794,9 +794,17 @@ def test_filter2_rejects_price_near_intraday_low() -> None:
 
 
 def test_filter2_is_fallback_only() -> None:
-    assert should_run_filter2_fallback(0)
-    assert not should_run_filter2_fallback(1)
-    assert not should_run_filter2_fallback(2)
+    # The relaxed lane is switched off, but its isolated implementation is intact.
+    import main
+    assert not should_run_filter2_fallback(0)
+    original = main.FILTER2_ENABLED
+    try:
+        main.FILTER2_ENABLED = True
+        assert should_run_filter2_fallback(0)
+        assert not should_run_filter2_fallback(1)
+        assert not should_run_filter2_fallback(2)
+    finally:
+        main.FILTER2_ENABLED = original
 
 
 
