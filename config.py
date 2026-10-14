@@ -18,15 +18,21 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID", "").strip()
 
 # Independent private-only PTSN-pattern momentum. Shares the existing scanner/cache.
-PTSN_STRUCTURE_ENABLED = os.getenv("PTSN_STRUCTURE_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
+PTSN_STRUCTURE_ENABLED = os.getenv("PTSN_STRUCTURE_ENABLED", "false").lower() in {"1", "true", "yes", "y"}
 PTSN_STRUCTURE_COOLDOWN_MINUTES = int(os.getenv("PTSN_STRUCTURE_COOLDOWN_MINUTES", "90"))
 PTSN_STRUCTURE_MAX_ALERTS_PER_CYCLE = int(os.getenv("PTSN_STRUCTURE_MAX_ALERTS_PER_CYCLE", "3"))
 
 USE_MULTI_QUOTE = os.getenv("USE_MULTI_QUOTE", "true").lower() in {"1", "true", "yes", "y"}
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "20"))
 TOP_MOVER_COUNT = int(os.getenv("TOP_MOVER_COUNT", "50"))
+# Cache-only Top Gainer digest; no new market-data calls or new workflow.
+TOP_GAINER_ENABLED = os.getenv("TOP_GAINER_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
+TOP_GAINER_COUNT = int(os.getenv("TOP_GAINER_COUNT", "10"))
+TOP_GAINER_MIN_COVERAGE = int(os.getenv("TOP_GAINER_MIN_COVERAGE", "300"))
+TOP_GAINER_SEND_AFTER_HOUR = int(os.getenv("TOP_GAINER_SEND_AFTER_HOUR", "10"))
+TOP_GAINER_TARGET = os.getenv("TOP_GAINER_TARGET", "all").strip().lower()
 FORCE_RUN = os.getenv("FORCE_RUN", "false").lower() in {"1", "true", "yes", "y"}
-MICRO_MAX_CANDIDATES = int(os.getenv("MICRO_MAX_CANDIDATES", "6"))
+MICRO_MAX_CANDIDATES = int(os.getenv("MICRO_MAX_CANDIDATES", "4"))
 FLOW_SCREENER_ENABLED = os.getenv("FLOW_SCREENER_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
 FLOW_RESERVED_SLOTS = int(os.getenv("FLOW_RESERVED_SLOTS", "2"))
 FLOW_PRE_MIN_SCORE = float(os.getenv("FLOW_PRE_MIN_SCORE", "50"))
@@ -37,7 +43,7 @@ FLOW_ALERT_COOLDOWN_MINUTES = int(os.getenv("FLOW_ALERT_COOLDOWN_MINUTES", "60")
 # environment variables remain accepted as fallbacks so production does not
 # require an immediate Secrets/Variables migration.
 FILTER2_ENABLED = os.getenv(
-    "FILTER2_ENABLED", os.getenv("FLOW_SCREENER_ENABLED", "true")
+    "FILTER2_ENABLED", "false"
 ).lower() in {"1", "true", "yes", "y"}
 FILTER2_RESERVED_SLOTS = int(
     os.getenv("FILTER2_RESERVED_SLOTS", os.getenv("FLOW_RESERVED_SLOTS", "2"))

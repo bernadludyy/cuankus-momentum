@@ -4,6 +4,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 from bot.notifier import send_telegram
+from scanner.top_gainer import NeonDailyDelivery, send_daily_top_gainers
+from datetime import datetime
 from scanner.ptsn_structure import build_ptsn_structure, format_ptsn_structure
 from project_fabric.observability import ObservabilityClient
 from config import (
@@ -18,6 +20,11 @@ from config import (
     MICRO_MAX_CANDIDATES,
     MICRO_MIN_PRE_SCORE,
     FILTER2_ENABLED,
+    TOP_GAINER_ENABLED,
+    TOP_GAINER_COUNT,
+    TOP_GAINER_MIN_COVERAGE,
+    TOP_GAINER_SEND_AFTER_HOUR,
+    TOP_GAINER_TARGET,
     PTSN_STRUCTURE_ENABLED,
     PTSN_STRUCTURE_COOLDOWN_MINUTES,
     PTSN_STRUCTURE_MAX_ALERTS_PER_CYCLE,
@@ -1404,6 +1411,24 @@ def run_once() -> None:
         )
     except Exception as exc:
         print(f"[WARN] market collector stock-summary gagal: {exc}")
+
+    # Top Gainer uses the SAME full stock-summary fetched above: no extra
+    # ZAPI request and no new Actions workflow. Neon prevents repeat sends.
+    if TOP_GAINER_ENABLED and shared_market_payload is not None:
+        try:
+            top_gainer_status = send_daily_top_gainers(
+                shared_market_payload,
+                when=datetime.now().astimezone(),
+                sender=send_telegram,
+                store=NeonDailyDelivery(),
+                count=TOP_GAINER_COUNT,
+                min_coverage=TOP_GAINER_MIN_COVERAGE,
+                after_hour=TOP_GAINER_SEND_AFTER_HOUR,
+                target=TOP_GAINER_TARGET,
+            )
+            print(f"[TOP-GAINER] {top_gainer_status}")
+        except Exception as exc:
+            print(f"[TOP-GAINER-WARN] {type(exc).__name__}: {str(exc)[:160]}")
 
     try:
         active_tickers = discover_active_tickers(
