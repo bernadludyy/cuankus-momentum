@@ -1160,6 +1160,26 @@ def ensure_reversal_watch(
     return inserted
 
 
+def cancel_filter2_reversal_watches() -> int:
+    """Disable any legacy Filter 2 lifecycle watch still active in SQLite."""
+    con = connect()
+    cur = con.execute(
+        """
+        UPDATE reversal_watches
+        SET state = 'CANCELLED',
+            cancelled_ts = ?,
+            last_eval_ts = ?
+        WHERE state IN ('WAIT_PULLBACK', 'PULLBACK_ACTIVE')
+          AND source_lane LIKE 'FILTER2%'
+        """,
+        (now_wib_iso(), now_wib_iso()),
+    )
+    changed = max(0, int(cur.rowcount or 0))
+    con.commit()
+    con.close()
+    return changed
+
+
 def get_recent_alert_seeds(
     *,
     max_age_minutes: int,
@@ -1173,17 +1193,10 @@ def get_recent_alert_seeds(
         SELECT ticker, ts, phase, price, 'FILTER1' AS lane
         FROM alerts
         WHERE ts >= ? AND substr(ts, 1, 10) = ?
-        UNION ALL
-        SELECT ticker, ts, NULL AS phase, price, 'FILTER2' AS lane
-        FROM screener_alerts
-        WHERE screener = 'FILTER2_RELAXED_MOMENTUM'
-          AND ts >= ? AND substr(ts, 1, 10) = ?
         ORDER BY ts DESC
         LIMIT ?
         """,
         (
-            cutoff.isoformat(timespec="seconds"),
-            today,
             cutoff.isoformat(timespec="seconds"),
             today,
             max(1, int(limit)),
