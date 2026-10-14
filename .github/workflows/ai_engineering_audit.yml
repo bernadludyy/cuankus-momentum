@@ -1,0 +1,93 @@
+name: AI Engineering Audit
+
+# Development-only skill validation and local AST graph. This workflow does
+# not run on Cron-job.org dispatch, market-scan workflow, or a schedule.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "AGENTS.md"
+      - ".agents/skills/**"
+      - "docs/engineering/**"
+      - ".github/workflows/ai_engineering_audit.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-engineering-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engineering:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      PROJECT_FABRIC_DATABASE_URL: ""
+      PROJECT_FABRIC_DB_REQUIRED: "false"
+      PROJECT_FABRIC_INTEGRATION_TESTS: "0"
+      GRAPHIFY_NO_TIPS: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate project-level skills and protected production settings
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          required = [
+              ".agents/skills/graphify/SKILL.md",
+              ".agents/skills/ponytail/SKILL.md",
+              ".agents/skills/systematic-debugging/SKILL.md",
+              ".agents/skills/test-driven-development/SKILL.md",
+              ".agents/skills/verification-before-completion/SKILL.md",
+          ]
+          for name in required:
+              text = Path(name).read_text(encoding="utf-8")
+              assert text.startswith("---\n") and "\nname:" in text, name
+          ignore = Path(".gitignore").read_text(encoding="utf-8").splitlines()
+          assert "graphify-out/" in ignore
+          assert ".runtime/" in ignore
+          wf = Path(".github/workflows/market_scanner.yml").read_text(encoding="utf-8")
+          assert "timeout-minutes: 4" in wf
+          assert 'TOP_GAINER_TARGET: "private"' in wf
+          assert 'FILTER2_ENABLED: "false"' in wf
+          assert 'PTSN_STRUCTURE_ENABLED: "false"' in wf
+          print(f"Validated {len(required)} project skill files and scanner safety settings")
+          PY
+
+      - name: Install Graphify analysis tool (CI only)
+        run: python -m pip install --disable-pip-version-check graphifyy
+
+      - name: Build local-only Python AST knowledge graph
+        run: |
+          graphify extract . --code-only --timing
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path("graphify-out")
+          graph = root / "graph.json"
+          assert graph.is_file() and graph.stat().st_size > 100
+          data = json.loads(graph.read_text(encoding="utf-8"))
+          assert data.get("nodes"), "empty code graph"
+          print(f"Graphify generated {len(data['nodes'])} nodes")
+          for name in ("GRAPH_REPORT.md", "graph.html"):
+              print(f"{name}: {(root / name).exists()}")
+          PY
+
+      - name: Upload private development artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot4-graphify-code-map
+          path: |
+            graphify-out/graph.json
+            graphify-out/graph.html
+            graphify-out/GRAPH_REPORT.md
+          retention-days: 7
+          if-no-files-found: warn
