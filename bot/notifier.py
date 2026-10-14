@@ -68,13 +68,21 @@ def _send_to_chat(message: str, chat_id: str) -> dict:
 
 
 def get_telegram_targets(target: str = "all") -> list[str]:
-    """Route explicitly: structural PTSN alerts must never reach the group."""
-    if target not in {"all", "private"}:
+    """Route explicitly between private, group-only, or both destinations."""
+    if target not in {"all", "private", "group"}:
         raise ValueError(f"Unknown Telegram target: {target}")
-    targets = [TELEGRAM_CHAT_ID]
-    if target == "private":
-        return [chat_id for chat_id in targets if chat_id]
 
+    if target == "private":
+        return [chat_id for chat_id in [TELEGRAM_CHAT_ID] if chat_id]
+
+    if target == "group":
+        return [
+            chat_id
+            for chat_id in [TELEGRAM_GROUP_CHAT_ID]
+            if chat_id
+        ]
+
+    targets = [TELEGRAM_CHAT_ID]
     if (
         TELEGRAM_GROUP_CHAT_ID
         and TELEGRAM_GROUP_CHAT_ID not in targets
@@ -85,7 +93,7 @@ def get_telegram_targets(target: str = "all") -> list[str]:
 
 
 def send_telegram(message: str, target: str = "all") -> dict:
-    """Send to both destinations by default, or only to the private chat."""
+    """Send to all, private-only, or group-only Telegram destinations."""
     validate_telegram_config()
 
     results = []
