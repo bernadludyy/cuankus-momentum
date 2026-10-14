@@ -20,7 +20,9 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    # Cron-job triggers every 5 minutes; allow slower IDX/ZAPI/Neon cycles
+    # to complete while keeping a hard ceiling below the next dispatch.
+    timeout-minutes: 4
     env:
       PROJECT_FABRIC_DATABASE_URL: ${{ secrets.PROJECT_FABRIC_DATABASE_URL }}
       PROJECT_FABRIC_CACHE_NAMESPACE: shared-v1
