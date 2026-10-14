@@ -133,7 +133,16 @@ class TopGainerTests(unittest.TestCase):
             "already_sent_or_claimed",
         )
         self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0][1], "all")
+        self.assertEqual(messages[0][1], "private")
+
+    def test_top_gainer_never_sends_to_group_even_if_target_all(self):
+        targets = []
+        result = send_daily_top_gainers(
+            self.data, when=self.when, store=FakeStore(), target="all",
+            sender=lambda message, *, target: targets.append(target) or {"ok": True},
+        )
+        self.assertEqual(result, "sent:3:scope=idx")
+        self.assertEqual(targets, ["private"])
 
     def test_failed_delivery_is_retryable(self):
         store = FakeStore()

@@ -204,9 +204,10 @@ def format_top_gainer_report(
 class NeonDailyDelivery:
     """Atomic day-based Telegram send claim; no local fallback that could spam."""
 
-    def __init__(self, database_url: str | None = None, owner: str | None = None):
+    def __init__(self, database_url: str | None = None, owner: str | None = None, namespace: str = NAMESPACE):
         self.database_url = database_url if database_url is not None else configured_database_url()
         self.owner = owner or f"{os.getenv('GITHUB_RUN_ID', 'local')}-{uuid.uuid4().hex}"
+        self.namespace = namespace
 
     def _connect(self):
         if not self.database_url or psycopg is None or Jsonb is None:
@@ -228,7 +229,7 @@ class NeonDailyDelivery:
                   AND project_fabric.cache_entries.saved_at < now() - interval '10 minutes'
                 RETURNING cache_key
                 """,
-                (NAMESPACE, day.isoformat(), Jsonb({"status": "pending", "owner": self.owner})),
+                (self.namespace, day.isoformat(), Jsonb({"status": "pending", "owner": self.owner})),
             )
             return cur.fetchone() is not None
 
@@ -242,7 +243,7 @@ class NeonDailyDelivery:
                     WHERE namespace=%s AND cache_key=%s
                       AND value_json->>'owner'=%s
                     """,
-                    (Jsonb({"status": "sent", "owner": self.owner}), NAMESPACE, day.isoformat(), self.owner),
+                    (Jsonb({"status": "sent", "owner": self.owner}), self.namespace, day.isoformat(), self.owner),
                 )
             else:
                 cur.execute(
@@ -250,7 +251,7 @@ class NeonDailyDelivery:
                     DELETE FROM project_fabric.cache_entries
                     WHERE namespace=%s AND cache_key=%s AND value_json->>'owner'=%s
                     """,
-                    (NAMESPACE, day.isoformat(), self.owner),
+                    (self.namespace, day.isoformat(), self.owner),
                 )
 
 
@@ -264,7 +265,7 @@ def send_daily_top_gainers(
     count: int = 10,
     min_coverage: int = 300,
     after_hour: int = 10,
-    target: str = "all",
+    target: str = "private",
 ) -> str:
     """Send once after 10 WIB, without a new API call or Actions job.
 
@@ -295,7 +296,8 @@ def send_daily_top_gainers(
 
     try:
         message = format_top_gainer_report(rows, trade_date=local.date(), when=local, coverage=coverage, scope=scope)
-        result = sender(message, target=target)
+        # Hard-enforced privacy: never deliver this report to Cuankus group.
+        result = sender(message, target="private")
         delivered = bool(result.get("ok"))
     except Exception:
         store.complete(local.date(), success=False)
