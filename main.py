@@ -1412,24 +1412,6 @@ def run_once() -> None:
     except Exception as exc:
         print(f"[WARN] market collector stock-summary gagal: {exc}")
 
-    # Top Gainer uses the SAME full stock-summary fetched above: no extra
-    # ZAPI request and no new Actions workflow. Neon prevents repeat sends.
-    if TOP_GAINER_ENABLED and shared_market_payload is not None:
-        try:
-            top_gainer_status = send_daily_top_gainers(
-                shared_market_payload,
-                when=datetime.now().astimezone(),
-                sender=send_telegram,
-                store=NeonDailyDelivery(),
-                count=TOP_GAINER_COUNT,
-                min_coverage=TOP_GAINER_MIN_COVERAGE,
-                after_hour=TOP_GAINER_SEND_AFTER_HOUR,
-                target=TOP_GAINER_TARGET,
-            )
-            print(f"[TOP-GAINER] {top_gainer_status}")
-        except Exception as exc:
-            print(f"[TOP-GAINER-WARN] {type(exc).__name__}: {str(exc)[:160]}")
-
     try:
         active_tickers = discover_active_tickers(
             TOP_MOVER_COUNT,
@@ -1484,6 +1466,25 @@ def run_once() -> None:
 
     if not quotes:
         raise RuntimeError("Tidak ada quote valid. Periksa konfigurasi ZPI/API.")
+
+    # Report from current stock-summary, or current quotes if IDX summary is stale.
+    # No extra ZAPI request or workflow; Neon guards daily Telegram dedup.
+    if TOP_GAINER_ENABLED and shared_market_payload is not None:
+        try:
+            top_gainer_status = send_daily_top_gainers(
+                shared_market_payload,
+                when=datetime.now().astimezone(),
+                sender=send_telegram,
+                fallback_quotes=quotes,
+                store=NeonDailyDelivery(),
+                count=TOP_GAINER_COUNT,
+                min_coverage=TOP_GAINER_MIN_COVERAGE,
+                after_hour=TOP_GAINER_SEND_AFTER_HOUR,
+                target=TOP_GAINER_TARGET,
+            )
+            print(f"[TOP-GAINER] {top_gainer_status}")
+        except Exception as exc:
+            print(f"[TOP-GAINER-WARN] {type(exc).__name__}: {str(exc)[:160]}")
 
     for quote in quotes:
         save_snapshot(quote)
