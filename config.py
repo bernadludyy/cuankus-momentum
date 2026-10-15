@@ -26,7 +26,7 @@ USE_MULTI_QUOTE = os.getenv("USE_MULTI_QUOTE", "true").lower() in {"1", "true", 
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "20"))
 TOP_MOVER_COUNT = int(os.getenv("TOP_MOVER_COUNT", "50"))
 # Cache-only Top Gainer digest; no new market-data calls or new workflow.
-TOP_GAINER_ENABLED = os.getenv("TOP_GAINER_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
+TOP_GAINER_ENABLED = False  # disabled by request; never send completed Top Gainer ranking
 TOP_GAINER_COUNT = int(os.getenv("TOP_GAINER_COUNT", "10"))
 TOP_GAINER_MIN_COVERAGE = int(os.getenv("TOP_GAINER_MIN_COVERAGE", "300"))
 TOP_GAINER_SEND_AFTER_HOUR = int(os.getenv("TOP_GAINER_SEND_AFTER_HOUR", "10"))
