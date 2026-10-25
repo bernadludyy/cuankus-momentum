@@ -100,7 +100,11 @@ class EODRefreshTests(TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(cache.set.call_count, 1)
         dated_key = cache.set.call_args.args[0]
-        self.assertIn('2026-10-13', dated_key)
+        expected_key = eod.DataGateway._cache_key(
+            'idx:stock-summary',
+            {'date': '2026-10-13', 'length': 5000, 'start': 0},
+        )
+        self.assertEqual(dated_key, expected_key)
 
     def test_manual_force_cannot_finalize_intraday(self):
         result = eod.finalize_eod(asof=NOW.replace(hour=15), force=True)
