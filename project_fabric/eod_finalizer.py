@@ -233,7 +233,8 @@ def validate_eod_summary(payload: Any, trade_date: str) -> list[dict[str, Any]]:
 
 
 def refresh_eod_summary(trade_date: str, *, asof: datetime, cache: Any,
-                        gateway: Any = None, archive: Any = None) -> tuple[Any, int]:
+                        gateway: Any = None, archive: Any = None,
+                        publish_canonical: bool = True) -> tuple[Any, int]:
     api_key = os.getenv("ZPI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("ZPI_API_KEY belum dikonfigurasi untuk EOD refresh")
@@ -251,8 +252,10 @@ def refresh_eod_summary(trade_date: str, *, asof: datetime, cache: Any,
     validate_eod_summary(payload, trade_date)
     stored = archive.save_summary(payload, completed_through=trade_date, asof=asof)
     cache.set(DataGateway._cache_key("idx:stock-summary", params), payload)
-    # Publish canonical raw key for the existing cache-only Telegram readers.
-    cache.set(DataGateway._cache_key("idx:stock-summary", {"length": 5000, "start": 0}), payload)
+    if publish_canonical:
+        # Only a current EOD finalization may replace the latest snapshot read by
+        # Telegram. Historical backfills keep their exact-date cache isolated.
+        cache.set(DataGateway._cache_key("idx:stock-summary", {"length": 5000, "start": 0}), payload)
     return payload, stored
 
 

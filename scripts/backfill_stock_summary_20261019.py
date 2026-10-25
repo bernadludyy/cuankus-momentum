@@ -18,18 +18,21 @@ def main():
     with archive._connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM project_fabric.stock_summary_daily WHERE trade_date=%s", (day,))
         existing = int(cur.fetchone()[0])
-    if existing:
-        print(f"SKIPPED_EXISTING date={target} rows={existing} zapi_calls=0")
-        return
     cache = PostgresTTLCache(configured_database_url(), namespace="shared-v1", service="cuankus-backfill", auto_migrate=False)
-    payload, saved = refresh_eod_summary(target, asof=datetime.now(ZoneInfo("Asia/Jakarta")), cache=cache, archive=archive)
+    payload, saved = refresh_eod_summary(
+        target,
+        asof=datetime.now(ZoneInfo("Asia/Jakarta")),
+        cache=cache,
+        archive=archive,
+        publish_canonical=False,
+    )
     rows = validate_eod_summary(payload, target)
     with archive._connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT count(*), count(DISTINCT ticker), count(*) FILTER (WHERE close_price IS NULL OR open_price IS NULL) FROM project_fabric.stock_summary_daily WHERE trade_date=%s", (day,))
         count, unique, missing = map(int, cur.fetchone())
     if count != len(rows) or unique != count or missing:
         raise RuntimeError(f"VERIFY_FAILED source={len(rows)} db={count} unique={unique} missing={missing}")
-    print(f"BACKFILL_SUCCESS date={target} rows={count} unique={unique} missing_ohlc={missing} archived={saved}")
+    print(f"BACKFILL_SUCCESS date={target} rows={count} unique={unique} missing_ohlc={missing} archived={saved} existing_before={existing}")
 
 if __name__ == "__main__":
     main()
