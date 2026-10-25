@@ -4,9 +4,8 @@ from datetime import datetime, date
 from zoneinfo import ZoneInfo
 
 from project_fabric.eod_finalizer import refresh_eod_summary, validate_eod_summary
-from project_fabric.data_gateway import DataGateway
 from project_fabric.market_archive import MarketArchive
-from project_fabric.cache import ProjectFabricCache
+from project_fabric.postgres_backend import PostgresTTLCache, configured_database_url
 
 def main():
     target = os.getenv("BACKFILL_TRADE_DATE", "2026-10-19")
@@ -22,7 +21,7 @@ def main():
     if existing:
         print(f"SKIPPED_EXISTING date={target} rows={existing} zapi_calls=0")
         return
-    cache = ProjectFabricCache(service="cuankus-backfill")
+    cache = PostgresTTLCache(configured_database_url(), namespace="shared-v1", service="cuankus-backfill", auto_migrate=False)
     payload, saved = refresh_eod_summary(target, asof=datetime.now(ZoneInfo("Asia/Jakarta")), cache=cache, archive=archive)
     rows = validate_eod_summary(payload, target)
     with archive._connect() as conn, conn.cursor() as cur:
