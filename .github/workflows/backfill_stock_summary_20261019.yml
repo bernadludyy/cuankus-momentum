@@ -1,0 +1,28 @@
+name: One-off Backfill IDX Stock Summary 2026-10-19
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: one-off-stock-summary-20261019
+  cancel-in-progress: false
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PROJECT_FABRIC_DATABASE_URL: ${{ secrets.PROJECT_FABRIC_DATABASE_URL }}
+      PROJECT_FABRIC_DB_REQUIRED: "true"
+      PROJECT_FABRIC_CACHE_NAMESPACE: shared-v1
+      ZPI_API_KEY: ${{ secrets.ZPI_API_KEY }}
+      ZPI_IDX_BASE_URL: https://api.zapi.ink/v1/finance:idx
+      BACKFILL_TRADE_DATE: "2026-10-19"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile scripts/backfill_stock_summary_20261019.py
+      - name: Backfill and verify exact date
+        run: python scripts/backfill_stock_summary_20261019.py
