@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import math
 from statistics import median
 from typing import Any
 
@@ -82,6 +83,56 @@ def _spike(
         return 1.0 if current_rate <= 0 else 5.0
 
     return current_rate / base
+
+
+def price_volume_context(features: dict, window_return_pct: float | None) -> dict:
+    """Research-only price/volume context; never adds points or gates alerts.
+
+    Inspired by Lee & Swaminathan (2000), DOI 10.1111/0022-1082.00280.
+    Intraday thresholds are hypotheses, not a replication of monthly momentum.
+    """
+    def finite(value):
+        try:
+            return value is not None and math.isfinite(float(value))
+        except (ValueError, TypeError, OverflowError):
+            return False
+
+    volume = features.get('volume_spike')
+    interval = features.get('interval_return_pct')
+    daily = features.get('daily_change_pct')
+    state = 'DATA_BELUM_CUKUP'
+    if all(finite(v) for v in (volume, interval, daily, window_return_pct)) and float(volume) >= 0:
+        volume, interval, daily, window_return_pct = map(float, (volume, interval, daily, window_return_pct))
+        if window_return_pct >= 5 or daily >= 8:
+            state = 'SUDAH_JAUH_NAIK'
+        elif interval < 0 and volume >= 1.5:
+            state = 'TURUN_DENGAN_VOLUME'
+        elif interval > 0 and window_return_pct > 0 and volume >= 1.5:
+            state = 'MENGUAT_DENGAN_VOLUME'
+        elif interval > 0 and volume < 1:
+            state = 'NAIK_VOLUME_LEMAH'
+        elif volume >= 1.5:
+            state = 'VOLUME_TANPA_KENAIKAN'
+        else:
+            state = 'BELUM_TERKONFIRMASI'
+    return {
+        'price_volume_context': state,
+        'price_volume_window_return_pct': window_return_pct if finite(window_return_pct) else None,
+        'price_volume_note': 'Riset: volume per menit vs median interval sebelumnya pada hari yang sama; bukan RVOL jam-sama lintas hari.',
+    }
+
+
+def format_price_volume_context(value: str | None) -> str:
+    """Human-readable Indonesian label for Telegram/log output."""
+    return {
+        "MENGUAT_DENGAN_VOLUME": "Menguat + volume",
+        "NAIK_VOLUME_LEMAH": "Naik, volume lemah",
+        "TURUN_DENGAN_VOLUME": "Turun + volume",
+        "VOLUME_TANPA_KENAIKAN": "Volume naik, harga tertahan",
+        "SUDAH_JAUH_NAIK": "Sudah jauh naik",
+        "BELUM_TERKONFIRMASI": "Belum terkonfirmasi",
+        "DATA_BELUM_CUKUP": "Data belum cukup",
+    }.get(value or "", "Data belum cukup")
 
 
 def build_features(
@@ -172,7 +223,7 @@ def build_features(
     if activity_spike is not None and interval_return_pct is not None:
         effort_result = activity_spike / max(abs(interval_return_pct), 0.15)
 
-    return {
+    features = {
         "ticker": current["ticker"],
         "price": current.get("last"),
         "daily_change_pct": daily_change_pct,
@@ -189,3 +240,26 @@ def build_features(
         "value_rate": current_rates["value"],
         "frequency_rate": current_rates["frequency"],
     }
+
+    # Use only a contiguous, valid trailing window. Sparse/malformed timestamps,
+    # resets and synthetic zero-baseline spikes cannot confirm research context.
+    window = snapshots[-6:]
+    window_return = None
+    try:
+        times = [datetime.fromisoformat(row['ts']) for row in window]
+        prices = [float(row['last']) for row in window]
+        valid = len(window) == 6 and all(math.isfinite(p) and p > 0 for p in prices)
+        valid = valid and all(0 < (b-a).total_seconds() <= 900 for a,b in zip(times,times[1:]))
+        volumes = [float(row['volume']) for row in window]
+        valid = valid and all(math.isfinite(v) and v >= 0 for v in volumes)
+        valid = valid and all(b >= a for a,b in zip(volumes,volumes[1:]))
+        if valid:
+            window_return = _safe_pct(prices[-1], prices[0])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        pass
+    baseline = baseline_rates['volume']
+    valid_baseline = (len(baseline) >= min_baseline_intervals and
+                      all(math.isfinite(x) and x >= 0 for x in baseline) and median(baseline) > 0)
+    context_features = features if valid_baseline else {**features, 'volume_spike': None}
+    features.update(price_volume_context(context_features, window_return))
+    return features
