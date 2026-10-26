@@ -94,3 +94,15 @@ The following confirmation endpoints are deliberately not cached:
 
 This keeps Bot 4 microstructure confirmation live while moving reusable
 historical/common data into Neon.
+
+## Volume-by-price cache
+
+Every candidate-only `running-trades` response is reused to update
+`project_fabric.volume_by_price_daily`; the collector does not make another
+ZAPI request. Rows are separated by `minimum_lot`, so the production 100-lot
+feed is not presented as complete all-trade market volume.
+
+`project_fabric.volume_by_price_seen_trades` is a short-lived fingerprint
+ledger that prevents overlapping running-trade windows from being counted
+twice. Fingerprints are retained for two days and daily price aggregates for
+120 days. A Neon write failure is observational and cannot block live alerts.

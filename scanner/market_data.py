@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Iterable
+import os
 import re
 
 from project_fabric.data_gateway import DataGateway, market_policy
@@ -21,6 +22,9 @@ from config import (
 _LAST_STOCK_SUMMARY_BY_TICKER: dict[str, dict[str, Any]] = {}
 _GATEWAY = DataGateway(service="cuankus-momentum")
 _ARCHIVE = MarketArchive(service="cuankus-momentum")
+_VOLUME_BY_PRICE_ENABLED = os.getenv(
+    "VOLUME_BY_PRICE_ENABLED", "true"
+).lower() in {"1", "true", "yes", "y"}
 
 
 def _headers() -> dict[str, str]:
@@ -306,7 +310,28 @@ def fetch_running_trades(
     if action:
         params["action"] = action.upper().strip()
 
-    return _get("running-trades", params)
+    payload = _get("running-trades", params)
+    if _VOLUME_BY_PRICE_ENABLED and _ARCHIVE.ready:
+        try:
+            saved = _ARCHIVE.save_volume_by_price(
+                ticker,
+                payload,
+                minimum_lot=max(1, int(min_lot)),
+            )
+            if saved["new_trades"]:
+                print(
+                    f"[VOLUME-BY-PRICE] {ticker.upper().strip()}: "
+                    f"new_trades={saved['new_trades']} "
+                    f"levels={saved['updated_price_levels']} "
+                    f"min_lot={max(1, int(min_lot))}"
+                )
+        except Exception as exc:
+            # Observational storage must never block the live scanner.
+            print(
+                f"[VOLUME-BY-PRICE-WARN] {ticker.upper().strip()}: "
+                f"{type(exc).__name__}: {str(exc)[:160]}"
+            )
+    return payload
 
 
 
