@@ -49,6 +49,12 @@ jobs:
         run: python -m project_fabric.db_admin migrate --require
       - name: Framework unit tests
         run: python -m unittest discover -s tests -p "test_project_fabric*.py" -v
+      - name: Volume-by-price unit tests
+        env:
+          PROJECT_FABRIC_DATABASE_URL: ""
+          PROJECT_FABRIC_DB_REQUIRED: "false"
+          PROJECT_FABRIC_INTEGRATION_TESTS: "0"
+        run: python -m unittest tests.test_volume_by_price_cache -v
       - name: Repository regression tests
         run: |
           python -m py_compile main.py scanner/*.py storage/*.py bot/*.py

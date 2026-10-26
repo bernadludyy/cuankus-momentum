@@ -92,6 +92,7 @@ jobs:
           RUNNING_TRADE_MIN_LOT: "100"
           RUNNING_TRADE_MAX_AGE_MINUTES: "15"
           BIG_PRINT_MIN_LOT: "500"
+          VOLUME_BY_PRICE_ENABLED: "true"
         run: python test_microstructure.py
 
       - name: Telegram delivery smoke test
@@ -147,6 +148,7 @@ jobs:
           RUNNING_TRADE_MIN_LOT: "100"
           RUNNING_TRADE_MAX_AGE_MINUTES: "15"
           BIG_PRINT_MIN_LOT: "500"
+          VOLUME_BY_PRICE_ENABLED: "true"
           FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.force_run && 'true' || 'false' }}
           RECENT_SNAPSHOTS: "12"
           MIN_BASELINE_INTERVALS: "4"

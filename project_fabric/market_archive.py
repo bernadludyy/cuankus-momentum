@@ -5,7 +5,10 @@ a completed daily bar. Existing API cache remains the low-latency path.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from collections import Counter
+from datetime import date, datetime, time, timedelta, timezone
+import hashlib
+import json
 import re
 from typing import Any
 
@@ -21,6 +24,10 @@ except ImportError:
 
 WIB = timezone(timedelta(hours=7))
 _CODE = re.compile(r"^[A-Z0-9]{1,15}$")
+_TRADE_ID_FIELDS = (
+    "id", "tradeId", "tradeID", "tradeNo", "tradeNumber",
+    "sequence", "seq", "matchId", "matchID",
+)
 
 
 def _num(row: dict, *names: str) -> float | None:
@@ -43,6 +50,95 @@ def _session_date(row: dict, *, history: bool) -> date | None:
         return date.fromisoformat(stamp)
     except ValueError:
         return None
+
+
+def _trade_clock(value: Any) -> time | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if "T" in text:
+        text = text.rsplit("T", 1)[-1]
+    text = text.removesuffix("Z").split("+", 1)[0]
+    for pattern in ("%H:%M:%S", "%H:%M:%S.%f"):
+        try:
+            return datetime.strptime(text, pattern).time()
+        except ValueError:
+            continue
+    return None
+
+
+def _trade_signature(item: dict[str, Any]) -> str:
+    for key in _TRADE_ID_FIELDS:
+        value = item.get(key)
+        if value not in (None, ""):
+            return f"{key}:{value}"
+    normalized = json.dumps(
+        item,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def prepare_volume_by_price_trades(
+    ticker: str,
+    payload: Any,
+    *,
+    minimum_lot: int,
+    asof: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Normalize one existing running-trades response for idempotent storage."""
+    ticker = ticker.strip().upper()
+    if not _CODE.fullmatch(ticker):
+        raise ValueError("Invalid IDX ticker")
+
+    now = (asof or datetime.now(WIB)).astimezone(WIB)
+    minimum_lot = max(1, int(minimum_lot))
+    occurrences: Counter[str] = Counter()
+    prepared: list[dict[str, Any]] = []
+
+    for item in _items(payload):
+        clock = _trade_clock(item.get("time") or item.get("tradeTime"))
+        if clock is None:
+            continue
+        trade_at = datetime.combine(now.date(), clock, tzinfo=WIB)
+        if trade_at > now + timedelta(minutes=2):
+            trade_at -= timedelta(days=1)
+
+        price = _num(item, "price", "Price", "tradePrice", "last", "Last")
+        lots = _num(item, "lots", "lot", "Lots", "Lot")
+        if price is None or price <= 0 or lots is None or lots < minimum_lot:
+            continue
+
+        action = str(item.get("action") or "UNKNOWN").strip().upper()
+        if action not in {"BUY", "SELL"}:
+            action = "UNKNOWN"
+
+        trade_value = _num(item, "tradeValue", "transactionValue", "value", "Value")
+        if trade_value is None or trade_value < 0:
+            trade_value = price * lots * 100.0
+
+        base_key = _trade_signature(item)
+        occurrences[base_key] += 1
+        ordinal = occurrences[base_key]
+        trade_key = hashlib.sha256(
+            f"{base_key}:{ordinal}".encode("utf-8")
+        ).hexdigest()
+
+        prepared.append({
+            "trade_date": trade_at.date().isoformat(),
+            "ticker": ticker,
+            "minimum_lot": minimum_lot,
+            "trade_key": trade_key,
+            "trade_time": trade_at.isoformat(timespec="seconds"),
+            "price": price,
+            "action": action,
+            "lots": lots,
+            "trade_value": trade_value,
+        })
+    return prepared
 
 
 class MarketArchive:
@@ -91,6 +187,189 @@ class MarketArchive:
                     computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     source_service TEXT NOT NULL,
                     PRIMARY KEY(trade_date,ticker,schema_version))""")
+                c.execute("""CREATE TABLE IF NOT EXISTS project_fabric.volume_by_price_daily (
+                    trade_date DATE NOT NULL,
+                    ticker TEXT NOT NULL,
+                    price NUMERIC NOT NULL CHECK (price > 0),
+                    minimum_lot INTEGER NOT NULL CHECK (minimum_lot >= 1),
+                    buy_lots NUMERIC NOT NULL DEFAULT 0 CHECK (buy_lots >= 0),
+                    sell_lots NUMERIC NOT NULL DEFAULT 0 CHECK (sell_lots >= 0),
+                    unknown_lots NUMERIC NOT NULL DEFAULT 0 CHECK (unknown_lots >= 0),
+                    buy_value_idr NUMERIC NOT NULL DEFAULT 0 CHECK (buy_value_idr >= 0),
+                    sell_value_idr NUMERIC NOT NULL DEFAULT 0 CHECK (sell_value_idr >= 0),
+                    unknown_value_idr NUMERIC NOT NULL DEFAULT 0 CHECK (unknown_value_idr >= 0),
+                    trade_count BIGINT NOT NULL DEFAULT 0 CHECK (trade_count >= 0),
+                    first_trade_time TIMESTAMPTZ NOT NULL,
+                    last_trade_time TIMESTAMPTZ NOT NULL,
+                    source_service TEXT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY(trade_date,ticker,price,minimum_lot))""")
+                c.execute("""CREATE INDEX IF NOT EXISTS idx_volume_by_price_ticker_day
+                    ON project_fabric.volume_by_price_daily
+                    (ticker,trade_date DESC,minimum_lot,price)""")
+                c.execute("""CREATE TABLE IF NOT EXISTS project_fabric.volume_by_price_seen_trades (
+                    trade_date DATE NOT NULL,
+                    ticker TEXT NOT NULL,
+                    minimum_lot INTEGER NOT NULL CHECK (minimum_lot >= 1),
+                    trade_key TEXT NOT NULL,
+                    trade_time TIMESTAMPTZ NOT NULL,
+                    price NUMERIC NOT NULL CHECK (price > 0),
+                    action TEXT NOT NULL CHECK (action IN ('BUY','SELL','UNKNOWN')),
+                    lots NUMERIC NOT NULL CHECK (lots >= 0),
+                    trade_value_idr NUMERIC NOT NULL CHECK (trade_value_idr >= 0),
+                    captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY(trade_date,ticker,minimum_lot,trade_key))""")
+                c.execute("""CREATE INDEX IF NOT EXISTS idx_volume_by_price_seen_captured
+                    ON project_fabric.volume_by_price_seen_trades (captured_at)""")
+
+    def save_volume_by_price(
+        self,
+        ticker: str,
+        payload: Any,
+        *,
+        minimum_lot: int,
+        asof: datetime | None = None,
+        aggregate_retention_days: int = 120,
+        fingerprint_retention_days: int = 2,
+    ) -> dict[str, int]:
+        """Aggregate an already-fetched running-trades payload without extra API calls."""
+        now = (asof or datetime.now(WIB)).astimezone(WIB)
+        prepared = prepare_volume_by_price_trades(
+            ticker,
+            payload,
+            minimum_lot=minimum_lot,
+            asof=now,
+        )
+        result = {
+            "received_trades": len(_items(payload)),
+            "prepared_trades": len(prepared),
+            "new_trades": 0,
+            "updated_price_levels": 0,
+        }
+        if not prepared:
+            return result
+
+        with self._connect() as cn:
+            with cn.cursor() as c:
+                with cn.transaction():
+                    c.execute(
+                        """DELETE FROM project_fabric.volume_by_price_seen_trades
+                           WHERE trade_date < %s""",
+                        (now.date() - timedelta(days=max(1, fingerprint_retention_days)),),
+                    )
+                    c.execute(
+                        """DELETE FROM project_fabric.volume_by_price_daily
+                           WHERE trade_date < %s""",
+                        (now.date() - timedelta(days=max(1, aggregate_retention_days)),),
+                    )
+                    c.execute(
+                        """WITH incoming AS (
+                            SELECT
+                                x.trade_date::date AS trade_date,
+                                x.ticker,
+                                x.minimum_lot,
+                                x.trade_key,
+                                x.trade_time::timestamptz AS trade_time,
+                                x.price::numeric AS price,
+                                x.action,
+                                x.lots::numeric AS lots,
+                                x.trade_value::numeric AS trade_value_idr
+                            FROM jsonb_to_recordset(%s::jsonb) AS x(
+                                trade_date text, ticker text, minimum_lot integer,
+                                trade_key text, trade_time text, price double precision,
+                                action text, lots double precision,
+                                trade_value double precision)
+                        ), inserted AS (
+                            INSERT INTO project_fabric.volume_by_price_seen_trades
+                                (trade_date,ticker,minimum_lot,trade_key,trade_time,
+                                 price,action,lots,trade_value_idr)
+                            SELECT trade_date,ticker,minimum_lot,trade_key,trade_time,
+                                   price,action,lots,trade_value_idr
+                            FROM incoming
+                            ON CONFLICT DO NOTHING
+                            RETURNING trade_date,ticker,minimum_lot,trade_time,price,
+                                      action,lots,trade_value_idr
+                        ), grouped AS (
+                            SELECT trade_date,ticker,price,minimum_lot,
+                                COALESCE(sum(lots) FILTER (WHERE action='BUY'),0) AS buy_lots,
+                                COALESCE(sum(lots) FILTER (WHERE action='SELL'),0) AS sell_lots,
+                                COALESCE(sum(lots) FILTER (WHERE action='UNKNOWN'),0) AS unknown_lots,
+                                COALESCE(sum(trade_value_idr) FILTER (WHERE action='BUY'),0) AS buy_value,
+                                COALESCE(sum(trade_value_idr) FILTER (WHERE action='SELL'),0) AS sell_value,
+                                COALESCE(sum(trade_value_idr) FILTER (WHERE action='UNKNOWN'),0) AS unknown_value,
+                                count(*) AS trade_count,
+                                min(trade_time) AS first_trade_time,
+                                max(trade_time) AS last_trade_time
+                            FROM inserted
+                            GROUP BY trade_date,ticker,price,minimum_lot
+                        ), upserted AS (
+                            INSERT INTO project_fabric.volume_by_price_daily
+                                (trade_date,ticker,price,minimum_lot,buy_lots,sell_lots,
+                                 unknown_lots,buy_value_idr,sell_value_idr,
+                                 unknown_value_idr,trade_count,first_trade_time,
+                                 last_trade_time,source_service)
+                            SELECT trade_date,ticker,price,minimum_lot,buy_lots,sell_lots,
+                                   unknown_lots,buy_value,sell_value,unknown_value,
+                                   trade_count,first_trade_time,last_trade_time,%s
+                            FROM grouped
+                            ON CONFLICT(trade_date,ticker,price,minimum_lot) DO UPDATE SET
+                                buy_lots=project_fabric.volume_by_price_daily.buy_lots+EXCLUDED.buy_lots,
+                                sell_lots=project_fabric.volume_by_price_daily.sell_lots+EXCLUDED.sell_lots,
+                                unknown_lots=project_fabric.volume_by_price_daily.unknown_lots+EXCLUDED.unknown_lots,
+                                buy_value_idr=project_fabric.volume_by_price_daily.buy_value_idr+EXCLUDED.buy_value_idr,
+                                sell_value_idr=project_fabric.volume_by_price_daily.sell_value_idr+EXCLUDED.sell_value_idr,
+                                unknown_value_idr=project_fabric.volume_by_price_daily.unknown_value_idr+EXCLUDED.unknown_value_idr,
+                                trade_count=project_fabric.volume_by_price_daily.trade_count+EXCLUDED.trade_count,
+                                first_trade_time=LEAST(project_fabric.volume_by_price_daily.first_trade_time,EXCLUDED.first_trade_time),
+                                last_trade_time=GREATEST(project_fabric.volume_by_price_daily.last_trade_time,EXCLUDED.last_trade_time),
+                                source_service=EXCLUDED.source_service,
+                                updated_at=now()
+                            RETURNING 1
+                        )
+                        SELECT (SELECT count(*) FROM inserted),
+                               (SELECT count(*) FROM upserted)""",
+                        (Jsonb(prepared), self.service),
+                    )
+                    counts = c.fetchone() or (0, 0)
+        result["new_trades"] = int(counts[0])
+        result["updated_price_levels"] = int(counts[1])
+        return result
+
+    def volume_by_price_rows(
+        self,
+        ticker: str,
+        *,
+        trade_date: date,
+        minimum_lot: int,
+        low_price: float | None = None,
+        high_price: float | None = None,
+    ) -> list[dict[str, Any]]:
+        ticker = ticker.strip().upper()
+        if not _CODE.fullmatch(ticker):
+            raise ValueError("Invalid IDX ticker")
+        low = 0.0 if low_price is None else float(low_price)
+        high = 1e25 if high_price is None else float(high_price)
+        if low < 0 or high < low:
+            raise ValueError("Invalid price range")
+        with self._connect() as cn:
+            with cn.cursor() as c:
+                c.execute(
+                    """SELECT price,buy_lots,sell_lots,unknown_lots,
+                              buy_value_idr,sell_value_idr,unknown_value_idr,
+                              trade_count,first_trade_time,last_trade_time,updated_at
+                       FROM project_fabric.volume_by_price_daily
+                       WHERE trade_date=%s AND ticker=%s AND minimum_lot=%s
+                         AND price BETWEEN %s AND %s
+                       ORDER BY price""",
+                    (trade_date, ticker, max(1, int(minimum_lot)), low, high),
+                )
+                rows = c.fetchall()
+        keys = (
+            "price", "buy_lots", "sell_lots", "unknown_lots",
+            "buy_value_idr", "sell_value_idr", "unknown_value_idr",
+            "trade_count", "first_trade_time", "last_trade_time", "updated_at",
+        )
+        return [dict(zip(keys, row)) for row in rows]
 
     def save_summary(self, payload: Any, *, completed_through: str | None = None,
                      asof: datetime | None = None) -> int:

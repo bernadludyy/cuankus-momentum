@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import os
 import unittest
-from project_fabric.market_archive import MarketArchive
+from project_fabric.market_archive import MarketArchive, WIB
 
 @unittest.skipUnless(
     os.environ.get("PROJECT_FABRIC_INTEGRATION_TESTS") == "1"
@@ -57,6 +57,31 @@ class MarketWarehouseIntegrationTests(unittest.TestCase):
         row, session = warehouse.summary_row(ticker)
         self.assertEqual(row["StockCode"], ticker)
         self.assertEqual(session.isoformat(), "2026-09-20")
+
+    def test_volume_by_price_is_idempotent(self):
+        warehouse = MarketArchive(service="warehouse-contract-test")
+        warehouse.migrate()
+        now = datetime.now(WIB)
+        clock = now.strftime("%H:%M:%S")
+        payload = {"items": [
+            {"id": "vbp-a", "time": clock, "action": "BUY", "lots": 100, "price": 67},
+            {"id": "vbp-b", "time": clock, "action": "SELL", "lots": 150, "price": 68},
+        ]}
+        first = warehouse.save_volume_by_price(
+            "ZZVBP", payload, minimum_lot=100, asof=now
+        )
+        second = warehouse.save_volume_by_price(
+            "ZZVBP", payload, minimum_lot=100, asof=now
+        )
+        self.assertEqual(first["new_trades"], 2)
+        self.assertEqual(second["new_trades"], 0)
+        rows = warehouse.volume_by_price_rows(
+            "ZZVBP", trade_date=now.date(), minimum_lot=100,
+            low_price=67, high_price=69,
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(float(rows[0]["buy_lots"]), 100.0)
+        self.assertEqual(float(rows[1]["sell_lots"]), 150.0)
 
 if __name__ == "__main__":
     unittest.main()
