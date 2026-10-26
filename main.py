@@ -87,6 +87,7 @@ from scanner.engine import (
     select_next_primary_phase,
     should_alert,
 )
+from scanner.features import format_price_volume_context
 from scanner.market_data import (
     collect_shared_market_snapshot,
     discover_active_tickers,
@@ -940,6 +941,8 @@ def format_alert(
         f"{format_num(result.get('volume_spike'), 'x')} / "
         f"{format_num(result.get('value_spike'), 'x')} / "
         f"{format_num(result.get('frequency_spike'), 'x')}\n"
+        f"• Harga-volume: {format_price_volume_context(result.get('price_volume_context'))} (riset)\n"
+        f"• Return 5 interval: {format_signed_pct(result.get('price_volume_window_return_pct'))}\n"
         f"• Breakout: {format_signed_pct(result.get('breakout_pct'))}\n"
         f"• Leakage / Momentum / Ignition: "
         f"{format_num(result.get('leakage_score'), '')} / "

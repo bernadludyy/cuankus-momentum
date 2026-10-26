@@ -10,6 +10,7 @@ import math
 from typing import Any, Callable
 
 from scanner.top_gainer import WIB, NeonDailyDelivery, _day, _items, _num, _CODE
+from scanner.features import format_price_volume_context
 
 POTENTIAL_NAMESPACE = "bot4-topgainer-potential-daily-v1"
 
@@ -172,6 +173,8 @@ def evaluate_potential(
         "risk_pct": round(risk, 2) if risk is not None else None,
         "reference_2r": reference_2r,
         "status": "BREAKOUT WATCH" if valid_entry else "WATCH ONLY / RISK TOO WIDE",
+        "price_volume_context": features.get("price_volume_context", "DATA_BELUM_CUKUP"),
+        "price_volume_window_return_pct": features.get("price_volume_window_return_pct"),
     }
 
 
@@ -228,6 +231,7 @@ def format_potential_report(candidates: list[dict], *, when: datetime) -> str:
             + (f"{x['volume_spike']:.2f}x" if x["volume_spike"] is not None else "N/A"),
             f"   Return interval {x['interval_return_pct']:+.2f}% • Range {x['range_position_pct']:.0f}%"
             + (f" • Breakout {x['breakout_pct']:+.2f}%" if x["breakout_pct"] is not None else ""),
+            f"   Harga-volume: {format_price_volume_context(x.get('price_volume_context'))} (riset)",
             f"   Setup: {x['status']}",
         ])
         if x["entry_trigger"] is not None:

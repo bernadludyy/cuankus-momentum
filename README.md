@@ -35,3 +35,19 @@ workflow identity, and cron trigger.
 
 The shareholder hard filter remains disabled in the live workflow until its IDX-PDF
 smoke test succeeds reliably.
+# Bot 4 price-volume research context
+
+The live alert and private Top Gainer Potential report include an observational
+`Harga-volume` label based on the existing intraday snapshots. It compares the
+latest volume-per-minute rate with the median of earlier intervals in the same
+IDX session, then pairs that ratio with the latest price return and the trailing
+five-interval return.
+
+The labels distinguish strengthening price with volume, a price increase on
+weak volume, selling with volume, high volume without price progress, and an
+already extended move. Missing, reset, zero-baseline, or non-contiguous data is
+reported as insufficient. This feature is inspired by Lee and Swaminathan
+(2000), but its intraday thresholds are an adaptation rather than a replication
+of their study. It does not change signal scores, alert gates, recipients,
+schedules, ZAPI calls, or the Neon schema.
+
