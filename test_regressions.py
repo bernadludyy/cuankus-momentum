@@ -45,6 +45,9 @@ from scanner.reversal_live import (
     score_live_reversal,
 )
 from scanner.engine import select_next_primary_phase
+from scanner.features import build_features
+from scanner.solo_filter import assess_solo_candidate
+from config import FILTER1_TELEGRAM_TARGET
 import storage.db as db
 
 
@@ -205,7 +208,8 @@ def test_pullback_reversal_entry_plan_uses_idx_ticks() -> None:
     assert setup["pullback_upper"] == 32.0
     assert setup["reversal_trigger"] == 33.0
     assert setup["breakout_base"] == 32.0
-    assert setup["entry_confirmation"] == "PARTIAL — WAIT TREND"
+    # Solo Mode requires bid dominance >=55%; 51% remains a watch only.
+    assert setup["entry_confirmation"] == "WAIT CONFIRMATION"
 
     falling = dict(
         beks,
@@ -243,7 +247,7 @@ def test_telegram_alert_contains_pullback_reversal_entry_section() -> None:
     assert "ENTRY REVERSAL / PULLBACK" in text
     assert "Pullback Area: Rp31–Rp32" in text
     assert "Reversal Trigger: reclaim ≥ Rp33 | Base Rp32" in text
-    assert "Buyer Confirm: PARTIAL — WAIT TREND" in text
+    assert "Buyer Confirm: WAIT CONFIRMATION" in text
     assert "Invalidation: < Rp30" in text
 
 
@@ -529,7 +533,7 @@ def test_filter1_value_ma50_gate_and_top_n_ranking() -> None:
     eligible = {
         "enough_history": True,
         "volume_ma_ratio": 2.2,
-        "value_ma": 1_000_000_000,
+        "value_ma": 4_000_000_000,
         "transaction_value_ma50": 6_000_000_000,
     }
     assert daily_filter_is_eligible(eligible)
@@ -549,6 +553,132 @@ def test_filter1_value_ma50_gate_and_top_n_ranking() -> None:
     )
     assert [item["ticker"] for item in selected] == ["B", "C", "A"]
     assert [item["ticker"] for item in suppressed] == ["D"]
+
+
+def _solo_powerful_candidate() -> dict:
+    return {
+        "ticker": "SOLO",
+        "phase": "POWERFUL_MOMENTUM",
+        "price": 200,
+        "score": 86,
+        "quality_score": 82,
+        "micro_score": 72,
+        "aggressive_buy_ratio": 0.68,
+        "bid_percent": 61,
+        "net_aggression_value": 180_000_000,
+        "aggression_trend": "RISING",
+        "volume_spike": 2.2,
+        "value_spike": 1.9,
+        "frequency_spike": 1.8,
+        "activity_spike": 1.97,
+        "position_in_range": 0.84,
+        "breakout_pct": 0.65,
+        "breakout_hold_snapshots": 2,
+        "daily_change_pct": 2.4,
+        "price_volume_context": "MENGUAT_DENGAN_VOLUME",
+        "anti_falling_knife_pass": True,
+        "not_overextended": True,
+        "selling_absorption": "CONFIRMED",
+    }
+
+
+def test_filter1_solo_mode_keeps_early_internal_and_pre_as_watch() -> None:
+    early = assess_solo_candidate(
+        {
+            "ticker": "EARLY",
+            "phase": "EARLY_IGNITION",
+            "price": 50,
+            "anti_falling_knife_pass": True,
+            "not_overextended": True,
+        }
+    )
+    assert early["solo_status"] == "INTERNAL_EARLY_WATCH", early
+    assert not early["solo_delivery_allowed"], early
+
+    # Price 50 remains eligible for a watch: Solo Mode intentionally adds no
+    # minimum-price gate.
+    watch = assess_solo_candidate(
+        {
+            "ticker": "WATCH",
+            "phase": "PRE_MOMENTUM",
+            "price": 50,
+            "quality_score": 70,
+            "micro_score": 65,
+            "aggressive_buy_ratio": 0.64,
+            "activity_spike": 1.8,
+            "position_in_range": 0.78,
+            "anti_falling_knife_pass": True,
+            "not_overextended": True,
+        }
+    )
+    assert watch["solo_status"] == "WATCH_ONLY", watch
+    assert watch["solo_delivery_allowed"], watch
+    assert not watch["solo_actionable"], watch
+    assert "PANTAU — BELUM ENTRY" in format_alert(watch)
+
+
+def test_filter1_solo_powerful_requires_full_confirmation() -> None:
+    confirmed = assess_solo_candidate(_solo_powerful_candidate())
+    assert confirmed["solo_status"] == "ENTRY_READY", confirmed
+    assert confirmed["solo_delivery_allowed"], confirmed
+    assert confirmed["solo_actionable"], confirmed
+    assert confirmed["solo_structure_risk_pct"] == 3.0, confirmed
+    assert "LAYAK EVALUASI ENTRY" in format_alert(confirmed)
+
+    weak_flow = _solo_powerful_candidate()
+    weak_flow.update(
+        {
+            "net_aggression_value": -10_000_000,
+            "aggression_trend": "FALLING",
+        }
+    )
+    rejected = assess_solo_candidate(weak_flow)
+    assert rejected["solo_status"] == "SUPPRESSED", rejected
+    assert not rejected["solo_delivery_allowed"], rejected
+    assert any("Net aggression" in x for x in rejected["solo_gate_failures"])
+    assert any("Aggression trend" in x for x in rejected["solo_gate_failures"])
+
+
+def test_filter1_solo_routing_and_ranking_are_private_action_first() -> None:
+    assert FILTER1_TELEGRAM_TARGET == "private"
+    watch = dict(
+        _solo_powerful_candidate(),
+        ticker="WATCH",
+        phase="PRE_MOMENTUM",
+        quality_score=95,
+        solo_actionable=False,
+    )
+    action = dict(
+        _solo_powerful_candidate(),
+        ticker="ACTION",
+        quality_score=80,
+        solo_actionable=True,
+    )
+    selected, _ = rank_top_n_candidates([watch, action], 2)
+    assert [item["ticker"] for item in selected] == ["ACTION", "WATCH"]
+
+
+def test_filter1_breakout_must_hold_two_snapshots() -> None:
+    start = datetime(2026, 10, 27, 9, 15, tzinfo=WIB)
+    prices = [100, 100, 100, 100, 100, 101, 101]
+    rows = []
+    for index, price in enumerate(prices):
+        rows.append(
+            {
+                "ticker": "HOLD",
+                "ts": (start + timedelta(minutes=4 * index)).isoformat(),
+                "last": price,
+                "prev_close": 99,
+                "high": 101,
+                "low": 99,
+                "volume": 1_000 + index * 100,
+                "value": 100_000 + index * 10_000,
+                "frequency": 100 + index * 10,
+            }
+        )
+    features = build_features(rows)
+    assert features is not None
+    assert features["breakout_hold_snapshots"] == 2, features
 
 
 def test_quality_score_and_selling_absorption() -> None:
@@ -1080,6 +1210,10 @@ if __name__ == "__main__":
     test_tradeflow_replaces_golden_pocket_in_telegram()
     test_dynamic_liquidity_observer_is_tiered_and_observational()
     test_filter1_value_ma50_gate_and_top_n_ranking()
+    test_filter1_solo_mode_keeps_early_internal_and_pre_as_watch()
+    test_filter1_solo_powerful_requires_full_confirmation()
+    test_filter1_solo_routing_and_ranking_are_private_action_first()
+    test_filter1_breakout_must_hold_two_snapshots()
     test_quality_score_and_selling_absorption()
     test_active_eod_watch_is_not_overwritten_by_live_fallback()
     test_filter2_legacy_reversal_watch_is_cancelled()

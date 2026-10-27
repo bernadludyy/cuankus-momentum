@@ -5,6 +5,7 @@ import math
 from statistics import median
 from typing import Any
 
+from config import MIN_BREAKOUT_PCT
 from scanner.market_hours import is_idx_market_window
 
 
@@ -213,6 +214,26 @@ def build_features(
         prior_high = max(prior_prices[-5:])
         breakout_pct = _safe_pct(float(current["last"]), prior_high)
 
+    # Confirmation-only context for Filter 1 Solo Mode. A breakout is counted
+    # as held when both latest snapshots remain at least MIN_BREAKOUT_PCT above
+    # the preceding five-snapshot base. This reuses cached snapshots and adds
+    # no market-data request.
+    breakout_hold_snapshots = 0
+    all_prices = [
+        float(x["last"])
+        for x in snapshots
+        if x.get("last") is not None
+    ]
+    if len(all_prices) >= 3:
+        base_prices = all_prices[:-2][-5:]
+        if base_prices:
+            breakout_base = max(base_prices)
+            for price in all_prices[-2:]:
+                held_pct = _safe_pct(price, breakout_base)
+                if held_pct is None or held_pct < MIN_BREAKOUT_PCT:
+                    break
+                breakout_hold_snapshots += 1
+
     spikes = [
         x for x in (volume_spike, value_spike, frequency_spike)
         if x is not None
@@ -236,6 +257,7 @@ def build_features(
         "activity_spike": activity_spike,
         "effort_result": effort_result,
         "breakout_pct": breakout_pct,
+        "breakout_hold_snapshots": breakout_hold_snapshots,
         "volume_rate": current_rates["volume"],
         "value_rate": current_rates["value"],
         "frequency_rate": current_rates["frequency"],

@@ -60,6 +60,8 @@ from config import (
     FILTER1_VALUE_MA50_WINDOW,
     FILTER1_MIN_VALUE_MA50_IDR,
     FILTER1_TOP_N_ALERTS_PER_CYCLE,
+    FILTER1_SOLO_MODE_ENABLED,
+    FILTER1_TELEGRAM_TARGET,
     QUALITY_SCORE_ENABLED,
     ENTRY_SETUP_ENABLED,
     REVERSAL_LIVE_ENABLED,
@@ -84,6 +86,7 @@ from scanner.engine import (
     mark_alerted,
     mark_no_signal,
     mark_signal_present,
+    mark_stage_observed,
     select_next_primary_phase,
     should_alert,
 )
@@ -104,6 +107,7 @@ from scanner.tradeflow import build_tradeflow_layers
 from scanner.quality import build_quality_metrics
 from scanner.liquidity_observer import build_dynamic_liquidity_observation
 from scanner.entry_setup import build_pullback_reversal_entry
+from scanner.solo_filter import assess_solo_candidate
 from scanner.reversal_live import evaluate_live_reversal_watch
 from scanner.eod_plan_live import (
     load_eod_entry_plans,
@@ -780,13 +784,14 @@ def enrich_result_with_quality(result: dict) -> dict:
     return {**result, **build_quality_metrics(result)}
 
 
-def _quality_sort_key(result: dict) -> tuple[float, float, int, str]:
+def _quality_sort_key(result: dict) -> tuple[float, float, float, int, str]:
     phase_rank = {
         "EARLY_IGNITION": 1,
         "PRE_MOMENTUM": 2,
         "POWERFUL_MOMENTUM": 3,
     }.get(str(result.get("phase") or ""), 0)
     return (
+        1.0 if result.get("solo_actionable") else 0.0,
         float(result.get("quality_score") or 0.0),
         float(result.get("score") or 0.0),
         phase_rank,
@@ -903,6 +908,20 @@ def format_alert(
         else ""
     )
 
+    solo_status = str(result.get("solo_status") or "")
+    solo_section = ""
+    if solo_status == "WATCH_ONLY":
+        solo_section = (
+            "\n🟡 SOLO MODE: PANTAU — BELUM ENTRY\n"
+            "Tunggu pullback/retest dan buyer confirmation sebelum entry.\n"
+        )
+    elif solo_status == "ENTRY_READY":
+        solo_section = (
+            "\n🟢 SOLO MODE: LAYAK EVALUASI ENTRY\n"
+            f"Buyer/flow terkonfirmasi | Risiko struktur "
+            f"{format_num(result.get('solo_structure_risk_pct'), '%')}\n"
+        )
+
     return (
         f"{icon} BOT 4 — {title}\n"
         f"{lane_name}{rank_text}\n"
@@ -910,7 +929,8 @@ def format_alert(
         f"📌 {result['ticker']} | {format_price(result.get('price'))}\n"
         f"⭐ Quality: "
         f"{format_num(result.get('quality_score'), '/100') if result.get('quality_score') is not None else 'N/A (data historis pre-V2)'} "
-        f"| Momentum: {format_num(result.get('score'), '/100')}\n\n"
+        f"| Momentum: {format_num(result.get('score'), '/100')}\n"
+        f"{solo_section}\n"
 
         f"{_format_entry_setup(result)}\n\n"
 
@@ -1164,7 +1184,7 @@ def bootstrap_reversal_watches_from_recent_alerts() -> int:
             ticker=ticker,
             source_lane=str(seed.get("lane") or "LEGACY_ALERT"),
             source_phase=seed.get("phase"),
-            target="private" if ticker == "PTSN" else "all",
+            target=FILTER1_TELEGRAM_TARGET,
             alert_price=float(setup["alert_price"]),
             pullback_lower=float(setup["pullback_lower"]),
             pullback_upper=float(setup["pullback_upper"]),
@@ -1351,7 +1371,11 @@ def run_live_reversal_engine(quotes: list[dict]) -> None:
                     "matched_trade_count": result.get("cumulative_trade_count"),
                 },
             )
-            target = str(result.get("target") or watch.get("target") or "all")
+            target = (
+                FILTER1_TELEGRAM_TARGET
+                if FILTER1_SOLO_MODE_ENABLED
+                else str(result.get("target") or watch.get("target") or "all")
+            )
             delivery = send_telegram(
                 format_live_reversal_confirmed(result),
                 target=target,
@@ -1386,7 +1410,11 @@ def run_live_reversal_engine(quotes: list[dict]) -> None:
                 )
 
         elif status == "CANCELLED" and result.get("send_failed_alert"):
-            target = str(watch.get("target") or "all")
+            target = (
+                FILTER1_TELEGRAM_TARGET
+                if FILTER1_SOLO_MODE_ENABLED
+                else str(watch.get("target") or "all")
+            )
             delivery = send_telegram(
                 format_live_reversal_cancelled(result, watch),
                 target=target,
@@ -1760,6 +1788,7 @@ def run_once() -> None:
             apply_micro_confirmation(result, micro)
         )
         result = enrich_result_with_quality(result)
+        result = assess_solo_candidate(result)
         processed_primary.append(result)
         primary_processed_by_ticker[ticker] = result
 
@@ -1966,6 +1995,31 @@ def run_once() -> None:
     primary_alert_pool: list[dict] = []
     for result in eligible_candidates:
         ticker = result["ticker"]
+        if (
+            FILTER1_SOLO_MODE_ENABLED
+            and result.get("solo_status") == "INTERNAL_EARLY_WATCH"
+        ):
+            mark_stage_observed(result)
+            evaluation_status[ticker] = "SOLO_EARLY_INTERNAL"
+            print(
+                f"[SOLO-INTERNAL] {ticker} EARLY_IGNITION "
+                "disimpan tanpa Telegram"
+            )
+            continue
+
+        if (
+            FILTER1_SOLO_MODE_ENABLED
+            and not result.get("solo_delivery_allowed")
+        ):
+            mark_signal_present(ticker)
+            evaluation_status[ticker] = "SOLO_GATE_SUPPRESSED"
+            print(
+                f"[SOLO-GATE-SUPPRESSED] {ticker}: "
+                f"phase={result.get('phase')} "
+                f"reasons={result.get('solo_gate_failures')}"
+            )
+            continue
+
         if should_alert(result):
             primary_alert_pool.append(result)
         else:
@@ -2075,7 +2129,7 @@ def run_once() -> None:
         )
         delivery = send_telegram(
             format_alert(result, rank=rank),
-            target="group",
+            target=FILTER1_TELEGRAM_TARGET,
         )
         delivery_ok = bool(delivery.get("ok"))
         _OBS.record_delivery(
@@ -2099,7 +2153,7 @@ def run_once() -> None:
             register_reversal_watch_from_result(
                 result,
                 lane="FILTER1_STRICT",
-                target="group",
+                target=FILTER1_TELEGRAM_TARGET,
             )
             print(
                 f"[ALERT] #{rank} {ticker} "
