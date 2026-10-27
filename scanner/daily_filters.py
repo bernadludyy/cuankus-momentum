@@ -162,6 +162,7 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
         value = _number(item.get("value", item.get("Value")))
         high = _number(item.get("high", item.get("High")))
         low = _number(item.get("low", item.get("Low")))
+        close = _number(item.get("close", item.get("Close")))
 
         if volume is None or value is None:
             continue
@@ -173,6 +174,7 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
                 "value": value,
                 "high": high,
                 "low": low,
+                "close": close,
             }
         )
 
@@ -201,6 +203,32 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
         ],
     }
 
+    close_rows = [row for row in rows if row.get("close") not in (None, 0)]
+    daily_sma20 = None
+    daily_sma20_prev = None
+    daily_last_close = None
+    daily_trend = "INSUFFICIENT"
+    if close_rows:
+        daily_last_close = float(close_rows[-1]["close"])
+    if len(close_rows) >= 21:
+        daily_sma20 = sum(float(x["close"]) for x in close_rows[-20:]) / 20
+        daily_sma20_prev = (
+            sum(float(x["close"]) for x in close_rows[-21:-1]) / 20
+        )
+        if daily_last_close > daily_sma20 and daily_sma20 >= daily_sma20_prev:
+            daily_trend = "UP"
+        elif daily_last_close < daily_sma20 and daily_sma20 <= daily_sma20_prev:
+            daily_trend = "DOWN"
+        else:
+            daily_trend = "SIDEWAYS"
+
+    daily_context = {
+        "daily_last_close": daily_last_close,
+        "daily_sma20": daily_sma20,
+        "daily_sma20_prev": daily_sma20_prev,
+        "daily_trend": daily_trend,
+    }
+
     if history_days < required:
         return {
             "history_days": history_days,
@@ -210,6 +238,7 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
             "value_ma": None,
             "transaction_value_ma50": None,
             "enough_history": False,
+            **daily_context,
             **golden,
             **tactical_golden,
         }
@@ -244,6 +273,7 @@ def compute_daily_filter_metrics(payload: Any) -> dict:
         "value_ma": value_ma,
         "transaction_value_ma50": transaction_value_ma50,
         "enough_history": True,
+        **daily_context,
         **golden,
         **tactical_golden,
     }

@@ -222,6 +222,22 @@ FILTER1_SOLO_MAX_STRUCTURE_RISK_PCT = float(
     os.getenv("FILTER1_SOLO_MAX_STRUCTURE_RISK_PCT", "3.00")
 )
 
+# Candidate-only multi-timeframe confirmation. Intraday bars are derived from
+# the scanner snapshots already persisted every cycle, so this layer adds no
+# market-data endpoint or upstream ZAPI request. It gates only Solo Mode
+# POWERFUL_MOMENTUM delivery; Pre-Momentum remains a watch notification.
+MTF_CONFIRMATION_ENABLED = os.getenv(
+    "MTF_CONFIRMATION_ENABLED", "true"
+).lower() in {"1", "true", "yes", "y"}
+MTF_SNAPSHOT_LOOKBACK = max(
+    36,
+    int(os.getenv("MTF_SNAPSHOT_LOOKBACK", "180")),
+)
+MTF_MIN_MOVE_PCT = max(
+    0.0,
+    float(os.getenv("MTF_MIN_MOVE_PCT", "0.10")),
+)
+
 # Post-alert entry guidance. This changes Telegram messaging only; it does not
 # alter Filter 1/2 eligibility, ranking, or execute orders.
 ENTRY_SETUP_ENABLED = os.getenv(
