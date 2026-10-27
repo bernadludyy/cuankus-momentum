@@ -143,16 +143,16 @@ PRE_MOMENTUM_MIN_POSITION_IN_RANGE = float(os.getenv("PRE_MOMENTUM_MIN_POSITION_
 ALERT_COOLDOWN_MINUTES = int(os.getenv("ALERT_COOLDOWN_MINUTES", "30"))
 SIGNAL_REARM_MINUTES = int(os.getenv("SIGNAL_REARM_MINUTES", "30"))
 MARKET_CAP_FILTER_ENABLED = os.getenv("MARKET_CAP_FILTER_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
-MIN_MARKET_CAP_IDR = float(os.getenv("MIN_MARKET_CAP_IDR", "100000000000"))
+MIN_MARKET_CAP_IDR = float(os.getenv("MIN_MARKET_CAP_IDR", "300000000000"))
 MAX_MARKET_CAP_IDR = float(os.getenv("MAX_MARKET_CAP_IDR", "10000000000000"))
 MARKET_CAP_CACHE_HOURS = int(os.getenv("MARKET_CAP_CACHE_HOURS", "24"))
 MAX_ALERT_PRICE = float(os.getenv("MAX_ALERT_PRICE", "500"))
 DAILY_FILTER_ENABLED = os.getenv("DAILY_FILTER_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
 VOLUME_MA_SHORT = int(os.getenv("VOLUME_MA_SHORT", "10"))
 VOLUME_MA_LONG = int(os.getenv("VOLUME_MA_LONG", "100"))
-VOLUME_MA_RATIO_MIN = float(os.getenv("VOLUME_MA_RATIO_MIN", "2.0"))
+VOLUME_MA_RATIO_MIN = float(os.getenv("VOLUME_MA_RATIO_MIN", "1.5"))
 VALUE_MA_WINDOW = int(os.getenv("VALUE_MA_WINDOW", "5"))
-MIN_VALUE_MA_IDR = float(os.getenv("MIN_VALUE_MA_IDR", "500000000"))
+MIN_VALUE_MA_IDR = float(os.getenv("MIN_VALUE_MA_IDR", "3000000000"))
 
 # Bot 4 V2 Filter 1 liquidity quality gate. This uses the existing stock-history
 # payload, so it adds no extra ZAPI endpoint call. Filter 2 and the PTSN
@@ -168,11 +168,59 @@ FILTER1_MIN_VALUE_MA50_IDR = float(
 # Final quality/ranking layer. Only new Filter 1 alerts/upgrades compete for
 # these slots; suppressed candidates remain observable and may rank later.
 FILTER1_TOP_N_ALERTS_PER_CYCLE = int(
-    os.getenv("FILTER1_TOP_N_ALERTS_PER_CYCLE", "3")
+    os.getenv("FILTER1_TOP_N_ALERTS_PER_CYCLE", "2")
 )
 QUALITY_SCORE_ENABLED = os.getenv(
     "QUALITY_SCORE_ENABLED", "true"
 ).lower() in {"1", "true", "yes", "y"}
+
+# Solo confirmation mode keeps early discovery inside the scanner, but only
+# sends a private watch after Pre-Momentum and an actionable alert after the
+# stronger buyer/flow/risk gates pass. There is deliberately no minimum-price
+# gate: the user asked to keep the existing price universe unchanged.
+FILTER1_SOLO_MODE_ENABLED = os.getenv(
+    "FILTER1_SOLO_MODE_ENABLED", "true"
+).lower() in {"1", "true", "yes", "y"}
+FILTER1_TELEGRAM_TARGET = "private"
+FILTER1_SOLO_WATCH_QUALITY_MIN = float(
+    os.getenv("FILTER1_SOLO_WATCH_QUALITY_MIN", "65")
+)
+FILTER1_SOLO_ENTRY_QUALITY_MIN = float(
+    os.getenv("FILTER1_SOLO_ENTRY_QUALITY_MIN", "75")
+)
+FILTER1_SOLO_ENTRY_MICRO_MIN = float(
+    os.getenv("FILTER1_SOLO_ENTRY_MICRO_MIN", "60")
+)
+FILTER1_SOLO_ENTRY_AGGRESSIVE_BUY_MIN = float(
+    os.getenv("FILTER1_SOLO_ENTRY_AGGRESSIVE_BUY_MIN", "0.60")
+)
+FILTER1_SOLO_ENTRY_BID_MIN = float(
+    os.getenv("FILTER1_SOLO_ENTRY_BID_MIN", "55")
+)
+FILTER1_SOLO_ENTRY_NET_AGGRESSION_MIN_IDR = float(
+    os.getenv("FILTER1_SOLO_ENTRY_NET_AGGRESSION_MIN_IDR", "50000000")
+)
+FILTER1_SOLO_ENTRY_POSITION_MIN = float(
+    os.getenv("FILTER1_SOLO_ENTRY_POSITION_MIN", "0.75")
+)
+FILTER1_SOLO_ENTRY_ACTIVITY_MIN = float(
+    os.getenv("FILTER1_SOLO_ENTRY_ACTIVITY_MIN", "1.50")
+)
+FILTER1_SOLO_ENTRY_BREAKOUT_MAX_PCT = float(
+    os.getenv("FILTER1_SOLO_ENTRY_BREAKOUT_MAX_PCT", "1.50")
+)
+FILTER1_SOLO_ENTRY_DAILY_CHANGE_MIN_PCT = float(
+    os.getenv("FILTER1_SOLO_ENTRY_DAILY_CHANGE_MIN_PCT", "0.00")
+)
+FILTER1_SOLO_ENTRY_DAILY_CHANGE_MAX_PCT = float(
+    os.getenv("FILTER1_SOLO_ENTRY_DAILY_CHANGE_MAX_PCT", "6.00")
+)
+FILTER1_SOLO_BREAKOUT_HOLD_SNAPSHOTS = int(
+    os.getenv("FILTER1_SOLO_BREAKOUT_HOLD_SNAPSHOTS", "2")
+)
+FILTER1_SOLO_MAX_STRUCTURE_RISK_PCT = float(
+    os.getenv("FILTER1_SOLO_MAX_STRUCTURE_RISK_PCT", "3.00")
+)
 
 # Post-alert entry guidance. This changes Telegram messaging only; it does not
 # alter Filter 1/2 eligibility, ranking, or execute orders.
@@ -181,10 +229,10 @@ ENTRY_SETUP_ENABLED = os.getenv(
 ).lower() in {"1", "true", "yes", "y"}
 ENTRY_PULLBACK_TICKS = int(os.getenv("ENTRY_PULLBACK_TICKS", "2"))
 ENTRY_MIN_AGGRESSIVE_BUY_RATIO = float(
-    os.getenv("ENTRY_MIN_AGGRESSIVE_BUY_RATIO", "0.55")
+    os.getenv("ENTRY_MIN_AGGRESSIVE_BUY_RATIO", "0.60")
 )
 ENTRY_MIN_BID_PERCENT = float(
-    os.getenv("ENTRY_MIN_BID_PERCENT", "50")
+    os.getenv("ENTRY_MIN_BID_PERCENT", "55")
 )
 
 # Live post-alert reversal engine. It only watches a small set of recently

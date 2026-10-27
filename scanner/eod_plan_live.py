@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import os
 from typing import Any
 
+from config import FILTER1_TELEGRAM_TARGET
 from project_fabric.eod_entry_plan import (
     EOD_PLAN_ENDPOINT,
     EOD_PLAN_PARAMS,
@@ -162,7 +163,7 @@ def seed_eod_entry_watches(
             ticker=ticker,
             source_lane=f"EOD_{plan.get('setup_type')}",
             source_phase="EOD_PLAN",
-            target="private" if ticker == "PTSN" else "all",
+            target=FILTER1_TELEGRAM_TARGET,
             alert_price=float(plan.get("eod_close") or plan["entry_zone_upper"]),
             pullback_lower=float(plan["entry_zone_lower"]),
             pullback_upper=float(plan["entry_zone_upper"]),

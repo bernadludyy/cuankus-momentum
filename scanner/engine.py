@@ -158,6 +158,16 @@ def mark_alerted(result: dict[str, Any]) -> None:
     )
 
 
+def mark_stage_observed(result: dict[str, Any]) -> None:
+    """Advance lifecycle state without recording or sending an alert."""
+    phase = result.get("phase")
+    if phase in PRIMARY_STAGES:
+        set_signal_anchor(
+            ticker=result["ticker"],
+            phase=phase,
+        )
+
+
 
 def mark_no_signal(ticker: str) -> None:
     observe_no_signal(ticker)
