@@ -62,6 +62,8 @@ from config import (
     FILTER1_TOP_N_ALERTS_PER_CYCLE,
     FILTER1_SOLO_MODE_ENABLED,
     FILTER1_TELEGRAM_TARGET,
+    MTF_CONFIRMATION_ENABLED,
+    MTF_SNAPSHOT_LOOKBACK,
     QUALITY_SCORE_ENABLED,
     ENTRY_SETUP_ENABLED,
     REVERSAL_LIVE_ENABLED,
@@ -108,6 +110,10 @@ from scanner.quality import build_quality_metrics
 from scanner.liquidity_observer import build_dynamic_liquidity_observation
 from scanner.entry_setup import build_pullback_reversal_entry
 from scanner.solo_filter import assess_solo_candidate
+from scanner.mtf_confirmation import (
+    apply_mtf_entry_gate,
+    evaluate_mtf_confirmation,
+)
 from scanner.reversal_live import evaluate_live_reversal_watch
 from scanner.eod_plan_live import (
     load_eod_entry_plans,
@@ -556,6 +562,10 @@ def prepare_daily_filter_candidate(result: dict) -> bool:
         result["golden_pocket_lookback_5d"] = metrics.get(
             "golden_pocket_lookback_5d"
         )
+        result["daily_last_close"] = metrics.get("daily_last_close")
+        result["daily_sma20"] = metrics.get("daily_sma20")
+        result["daily_sma20_prev"] = metrics.get("daily_sma20_prev")
+        result["daily_trend"] = metrics.get("daily_trend")
 
     result["_daily_filter_checked"] = True
     result["_daily_filter_eligible"] = eligible
@@ -818,6 +828,52 @@ def _trend_label(value) -> str:
     }.get(str(value or ""), "-")
 
 
+def _format_mtf_confirmation(result: dict) -> str:
+    if not result.get("mtf_enabled"):
+        return ""
+
+    trend_labels = {
+        "UP": "NAIK ↗",
+        "DOWN": "TURUN ↘",
+        "SIDEWAYS": "SIDEWAYS →",
+        "TRIGGER": "TRIGGER ✅",
+        "WAIT": "MENUNGGU",
+        "WEAK": "MELEMAH ↘",
+        "INSUFFICIENT": "DATA BELUM CUKUP",
+    }
+    status_labels = {
+        "ALIGNED": "MTF SELARAS ✅",
+        "WAIT_TRIGGER": "TUNGGU TRIGGER 5 MENIT 🟡",
+        "CONFLICT": "MTF BELUM SELARAS 🔴",
+        "INSUFFICIENT": "MTF BELUM CUKUP DATA ⚪",
+    }
+
+    def line(label: str, state_key: str, return_key: str | None = None) -> str:
+        state = str(result.get(state_key) or "INSUFFICIENT")
+        suffix = ""
+        if return_key and result.get(return_key) is not None:
+            suffix = f" ({format_signed_pct(result.get(return_key))})"
+        return f"• {label}: {trend_labels.get(state, state)}{suffix}"
+
+    lines = [
+        "🎯 MULTI-TIMEFRAME — CACHE SNAPSHOT",
+        line("Daily", "mtf_daily"),
+        line("1 jam", "mtf_1h", "mtf_1h_return_pct"),
+        line("15 menit", "mtf_15m", "mtf_15m_return_pct"),
+        line("5 menit", "mtf_5m", "mtf_5m_return_pct"),
+        f"• Status: {status_labels.get(str(result.get('mtf_status')), '-')}",
+    ]
+    if result.get("mtf_status") == "INSUFFICIENT":
+        lines.append(
+            "• Bar tersedia: "
+            f"5m {int(result.get('mtf_5m_bars') or 0)} | "
+            f"15m {int(result.get('mtf_15m_bars') or 0)} | "
+            f"1j {int(result.get('mtf_1h_bars') or 0)}"
+        )
+    lines.append("• Sumber: snapshot scanner; bukan candle exchange-native")
+    return "\n".join(lines)
+
+
 def _format_entry_setup(result: dict) -> str:
     if not ENTRY_SETUP_ENABLED:
         return ""
@@ -933,6 +989,8 @@ def format_alert(
         f"{solo_section}\n"
 
         f"{_format_entry_setup(result)}\n\n"
+
+        f"{_format_mtf_confirmation(result)}\n\n"
 
         "💧 LIKUIDITAS\n"
         f"• Tx Value MA50: "
@@ -1788,7 +1846,20 @@ def run_once() -> None:
             apply_micro_confirmation(result, micro)
         )
         result = enrich_result_with_quality(result)
+        mtf_snapshots = (
+            get_recent_snapshots(ticker, MTF_SNAPSHOT_LOOKBACK)
+            if MTF_CONFIRMATION_ENABLED
+            else []
+        )
+        result.update(
+            evaluate_mtf_confirmation(
+                result,
+                mtf_snapshots,
+                enabled=MTF_CONFIRMATION_ENABLED,
+            )
+        )
         result = assess_solo_candidate(result)
+        result = apply_mtf_entry_gate(result)
         processed_primary.append(result)
         primary_processed_by_ticker[ticker] = result
 
@@ -1799,7 +1870,8 @@ def run_once() -> None:
             f"bid={format_num(result.get('bid_percent'), '%')} "
             f"phase={result['phase']} "
             f"score={result['score']} "
-            f"quality={result.get('quality_score')}"
+            f"quality={result.get('quality_score')} "
+            f"mtf={result.get('mtf_status')}"
         )
 
         if result["phase"] == "NONE":
@@ -2125,6 +2197,11 @@ def run_once() -> None:
                 "selling_absorption": result.get(
                     "selling_absorption"
                 ),
+                "mtf_status": result.get("mtf_status"),
+                "mtf_daily": result.get("mtf_daily"),
+                "mtf_1h": result.get("mtf_1h"),
+                "mtf_15m": result.get("mtf_15m"),
+                "mtf_5m": result.get("mtf_5m"),
             },
         )
         delivery = send_telegram(

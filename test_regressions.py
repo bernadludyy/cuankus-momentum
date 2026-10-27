@@ -47,6 +47,10 @@ from scanner.reversal_live import (
 from scanner.engine import select_next_primary_phase
 from scanner.features import build_features
 from scanner.solo_filter import assess_solo_candidate
+from scanner.mtf_confirmation import (
+    apply_mtf_entry_gate,
+    evaluate_mtf_confirmation,
+)
 from config import FILTER1_TELEGRAM_TARGET
 import storage.db as db
 
@@ -639,6 +643,94 @@ def test_filter1_solo_powerful_requires_full_confirmation() -> None:
     assert any("Aggression trend" in x for x in rejected["solo_gate_failures"])
 
 
+def _rising_mtf_snapshots() -> list[dict]:
+    start = datetime(2026, 10, 27, 9, 0, tzinfo=WIB)
+    return [
+        {
+            "ticker": "SOLO",
+            "ts": (start + timedelta(minutes=5 * index)).isoformat(),
+            "last": 100.0 + index * 0.25,
+            "volume": 1_000_000 + index * 10_000,
+        }
+        for index in range(36)
+    ]
+
+
+def test_candidate_only_mtf_aligns_from_cached_snapshots() -> None:
+    result = {
+        "ticker": "SOLO",
+        "price": 109.0,
+        "daily_sma20": 100.0,
+        "daily_sma20_prev": 99.0,
+    }
+    mtf = evaluate_mtf_confirmation(
+        result,
+        _rising_mtf_snapshots(),
+        enabled=True,
+    )
+    assert mtf["mtf_status"] == "ALIGNED", mtf
+    assert mtf["mtf_daily"] == "UP"
+    assert mtf["mtf_1h"] == "UP"
+    assert mtf["mtf_15m"] == "UP"
+    assert mtf["mtf_5m"] == "TRIGGER"
+
+
+def test_mtf_intraday_bars_do_not_bridge_trading_days() -> None:
+    snapshots = _rising_mtf_snapshots()
+    next_day = datetime(2026, 10, 28, 9, 0, tzinfo=WIB)
+    snapshots.extend(
+        {
+            "ticker": "SOLO",
+            "ts": (next_day + timedelta(minutes=5 * index)).isoformat(),
+            "last": 110.0 + index * 0.25,
+            "volume": 2_000_000 + index * 10_000,
+        }
+        for index in range(3)
+    )
+    mtf = evaluate_mtf_confirmation(
+        {
+            "ticker": "SOLO",
+            "price": 111.0,
+            "daily_sma20": 100.0,
+            "daily_sma20_prev": 99.0,
+        },
+        snapshots,
+        enabled=True,
+    )
+    assert mtf["mtf_status"] == "INSUFFICIENT", mtf
+    assert mtf["mtf_5m_bars"] == 3
+
+
+def test_mtf_fails_closed_and_holds_solo_entry_until_aligned() -> None:
+    insufficient = evaluate_mtf_confirmation(
+        {
+            "ticker": "SOLO",
+            "price": 200,
+            "daily_sma20": 180,
+            "daily_sma20_prev": 179,
+        },
+        _rising_mtf_snapshots()[:3],
+        enabled=True,
+    )
+    assert insufficient["mtf_status"] == "INSUFFICIENT", insufficient
+
+    candidate = assess_solo_candidate(_solo_powerful_candidate())
+    candidate.update(insufficient)
+    held = apply_mtf_entry_gate(candidate)
+    assert held["solo_status"] == "MTF_WAIT", held
+    assert not held["solo_delivery_allowed"], held
+    assert not held["solo_actionable"], held
+    assert "Data MTF belum cukup" in held["solo_gate_failures"]
+
+    aligned = dict(candidate, mtf_status="ALIGNED")
+    released = apply_mtf_entry_gate(aligned)
+    assert released["solo_status"] == "ENTRY_READY", released
+    assert released["solo_delivery_allowed"], released
+    alert = format_alert(released)
+    assert "MULTI-TIMEFRAME" in alert
+    assert "MTF SELARAS" in alert
+
+
 def test_filter1_solo_routing_and_ranking_are_private_action_first() -> None:
     assert FILTER1_TELEGRAM_TARGET == "private"
     watch = dict(
@@ -850,11 +942,17 @@ def test_daily_filter_cache_roundtrip_includes_value_ma50() -> None:
                 "golden_pocket_lower_5d": 108,
                 "golden_pocket_upper_5d": 110,
                 "golden_pocket_lookback_5d": 5,
+                "daily_last_close": 120,
+                "daily_sma20": 110,
+                "daily_sma20_prev": 109,
+                "daily_trend": "UP",
             }
             db.save_daily_filter("TEST", metrics)
             cached = db.get_cached_daily_filter("TEST", max_age_hours=1)
             assert cached is not None
             assert cached["transaction_value_ma50"] == 7_500_000_000
+            assert cached["daily_sma20"] == 110
+            assert cached["daily_trend"] == "UP"
 
             con = db.connect()
             columns = {
@@ -865,6 +963,7 @@ def test_daily_filter_cache_roundtrip_includes_value_ma50() -> None:
             }
             con.close()
             assert "transaction_value_ma50" in columns
+            assert "daily_sma20" in columns
     finally:
         db.DB_PATH = original_path
 
@@ -913,6 +1012,28 @@ def test_golden_pocket_from_recent_bullish_swing() -> None:
     assert round(metrics["golden_pocket_lower_5d"], 2) == 153.50
     assert round(metrics["golden_pocket_upper_5d"], 2) == 153.82
     assert metrics["golden_pocket_lookback_5d"] == 5
+
+
+def test_daily_filter_exposes_completed_eod_sma20_trend() -> None:
+    start = datetime(2026, 9, 1).date()
+    payload = {
+        "data": [
+            {
+                "date": (start + timedelta(days=index)).isoformat(),
+                "volume": 1_000_000,
+                "value": 1_000_000_000,
+                "low": 90 + index,
+                "high": 92 + index,
+                "close": 91 + index,
+            }
+            for index in range(25)
+        ]
+    }
+    metrics = compute_daily_filter_metrics(payload)
+    assert metrics["daily_last_close"] == 115
+    assert metrics["daily_sma20"] is not None
+    assert metrics["daily_sma20_prev"] is not None
+    assert metrics["daily_trend"] == "UP", metrics
 
 
 def _relaxed_candidate() -> dict:
@@ -1212,6 +1333,9 @@ if __name__ == "__main__":
     test_filter1_value_ma50_gate_and_top_n_ranking()
     test_filter1_solo_mode_keeps_early_internal_and_pre_as_watch()
     test_filter1_solo_powerful_requires_full_confirmation()
+    test_candidate_only_mtf_aligns_from_cached_snapshots()
+    test_mtf_intraday_bars_do_not_bridge_trading_days()
+    test_mtf_fails_closed_and_holds_solo_entry_until_aligned()
     test_filter1_solo_routing_and_ranking_are_private_action_first()
     test_filter1_breakout_must_hold_two_snapshots()
     test_quality_score_and_selling_absorption()
@@ -1219,6 +1343,7 @@ if __name__ == "__main__":
     test_filter2_legacy_reversal_watch_is_cancelled()
     test_daily_filter_cache_roundtrip_includes_value_ma50()
     test_golden_pocket_from_recent_bullish_swing()
+    test_daily_filter_exposes_completed_eod_sma20_trend()
     test_filter2_relaxed_can_confirm_before_filter1()
     test_filter2_never_relaxes_falling_knife_gate()
     test_filter2_rejects_price_near_intraday_low()

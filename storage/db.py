@@ -226,6 +226,10 @@ def init_db() -> None:
             golden_pocket_lower_5d REAL,
             golden_pocket_upper_5d REAL,
             golden_pocket_lookback_5d INTEGER,
+            daily_last_close REAL,
+            daily_sma20 REAL,
+            daily_sma20_prev REAL,
+            daily_trend TEXT,
             ts TEXT NOT NULL
         )
         """
@@ -252,6 +256,10 @@ def init_db() -> None:
         ("golden_pocket_lower_5d", "REAL"),
         ("golden_pocket_upper_5d", "REAL"),
         ("golden_pocket_lookback_5d", "INTEGER"),
+        ("daily_last_close", "REAL"),
+        ("daily_sma20", "REAL"),
+        ("daily_sma20_prev", "REAL"),
+        ("daily_trend", "TEXT"),
     ):
         if column_name not in daily_filter_columns:
             cur.execute(
@@ -661,6 +669,10 @@ def get_cached_daily_filter(
             golden_pocket_lower_5d,
             golden_pocket_upper_5d,
             golden_pocket_lookback_5d,
+            daily_last_close,
+            daily_sma20,
+            daily_sma20_prev,
+            daily_trend,
             ts
         FROM daily_filter_cache
         WHERE ticker = ?
@@ -703,6 +715,10 @@ def get_cached_daily_filter(
         "golden_pocket_lookback_5d": row[
             "golden_pocket_lookback_5d"
         ],
+        "daily_last_close": row["daily_last_close"],
+        "daily_sma20": row["daily_sma20"],
+        "daily_sma20_prev": row["daily_sma20_prev"],
+        "daily_trend": row["daily_trend"] or "INSUFFICIENT",
     }
 
 
@@ -733,11 +749,16 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
             golden_pocket_lower_5d,
             golden_pocket_upper_5d,
             golden_pocket_lookback_5d,
+            daily_last_close,
+            daily_sma20,
+            daily_sma20_prev,
+            daily_trend,
             ts
         )
         VALUES (
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?
         )
         ON CONFLICT(ticker) DO UPDATE SET
             volume_ma_short = excluded.volume_ma_short,
@@ -761,6 +782,10 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
             golden_pocket_lower_5d = excluded.golden_pocket_lower_5d,
             golden_pocket_upper_5d = excluded.golden_pocket_upper_5d,
             golden_pocket_lookback_5d = excluded.golden_pocket_lookback_5d,
+            daily_last_close = excluded.daily_last_close,
+            daily_sma20 = excluded.daily_sma20,
+            daily_sma20_prev = excluded.daily_sma20_prev,
+            daily_trend = excluded.daily_trend,
             ts = excluded.ts
         """,
         (
@@ -794,6 +819,10 @@ def save_daily_filter(ticker: str, metrics: dict[str, Any]) -> None:
                 if metrics.get("golden_pocket_lookback_5d") is not None
                 else None
             ),
+            metrics.get("daily_last_close"),
+            metrics.get("daily_sma20"),
+            metrics.get("daily_sma20_prev"),
+            metrics.get("daily_trend"),
             now_wib_iso(),
         ),
     )
