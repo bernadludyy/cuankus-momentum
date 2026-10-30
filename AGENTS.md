@@ -10,6 +10,7 @@ This is a **production IHSG scanner**. Follow the project conventions before usi
 - Do not add Graphify, Superpowers, Ponytail, or AI inference dependencies to `requirements.txt` or the live GitHub Actions workflow. These are **developer tooling**, not runtime dependencies.
 - Keep new tool output local. Never commit `.env`, `.runtime/`, `data/`, or `graphify-out/` artifacts.
 - Prefer an isolated branch. For changes touching scores, EOD freshness, money, alert deduplication, or routing, add relevant offline regression tests before changing logic.
+- Use `.agents/skills/bot-output-quality/SKILL.md` when editing code comments, Telegram alerts, command responses, or operator documentation. Preserve source dates, live/EOD labels, units, and the separation between facts, interpretation, and suggested action.
 
 ## Scope and data flow
 

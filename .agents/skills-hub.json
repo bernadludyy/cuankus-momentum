@@ -1,14 +1,15 @@
 {
   "schema_version": 1,
   "source_repository": "bernadludyy/engineering-skills-hub",
-  "hub_version": "0.1.0",
-  "hub_commit": "f0c6e1cfea27a8c2b2a10e81e4bc127abc54f415",
+  "hub_version": "0.2.0",
+  "hub_commit": "126e26838884a75d6418edf7d75000729cd4dea9",
   "installed_skills": [
     "bot-safe-change",
     "bot-diagnose",
     "bot-tdd",
     "bot-code-review",
-    "bot-pr"
+    "bot-pr",
+    "bot-output-quality"
   ],
   "distribution": "reviewed-snapshot",
   "runtime_dependency": false
