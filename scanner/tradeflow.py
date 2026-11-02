@@ -97,9 +97,28 @@ def build_tradeflow_layers(
         min_samples=min_samples,
         flat_tolerance_pct=flat_tolerance_pct,
     )
+    latest = history[-1] if history else {}
+    previous = history[-2] if len(history) > 1 else {}
+    latest_delta = _number(latest.get("net_aggression_value"))
+    previous_delta = _number(previous.get("net_aggression_value"))
+    moment = "DATA_BELUM_CUKUP"
+    if latest_delta is not None:
+        if previous_delta is not None and previous_delta <= 0 < latest_delta:
+            moment = "BERBALIK_BELI"
+        elif previous_delta is not None and previous_delta >= 0 > latest_delta:
+            moment = "BERBALIK_JUAL"
+        elif latest_delta > 0:
+            moment = "BELI_DOMINAN"
+        elif latest_delta < 0:
+            moment = "JUAL_DOMINAN"
+        else:
+            moment = "SEIMBANG"
     return {
         "aggressive_buy_value": _number(micro.get("aggressive_buy_value")),
         "aggressive_sell_value": _number(micro.get("aggressive_sell_value")),
         "net_aggression_value": _number(micro.get("net_aggression_value")),
+        "latest_delta_value": latest_delta,
+        "latest_delta_ts": latest.get("ts") if latest_delta is not None else None,
+        "latest_delta_moment": moment,
         **trend,
     }

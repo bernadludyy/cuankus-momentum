@@ -955,6 +955,15 @@ def format_alert(
         "NONE": "—",
     }.get(absorption, "—")
 
+    delta_snapshot_text = "• Delta snapshot terakhir: N/A (belum ada data live)\n"
+    if result.get("latest_delta_ts") and result.get("latest_delta_value") is not None:
+        sample_time = str(result["latest_delta_ts"]).replace("T", " ")[:16]
+        delta_snapshot_text = (
+            f"• Delta snapshot terakhir: "
+            f"{format_rupiah_signed(result['latest_delta_value'])} "
+            f"({sample_time} WIB)\n"
+        )
+
     reasons = "\n".join(
         f"• {x}" for x in result.get("reasons", [])[:3]
     )
@@ -1005,6 +1014,8 @@ def format_alert(
         f"• Agg Sell: {format_rupiah_compact(result.get('aggressive_sell_value'))}\n"
         f"• Net Aggression: "
         f"{format_rupiah_signed(result.get('net_aggression_value'))}\n"
+        f"{delta_snapshot_text}"
+        f"• Momen delta antar snapshot: {result.get('latest_delta_moment', 'DATA_BELUM_CUKUP').replace('_', ' ')}\n"
         f"• Aggression Trend: {_trend_label(result.get('aggression_trend'))}\n"
         f"• Selling Absorption: {absorption} {absorption_icon}\n"
         f"• Agg Buy Ratio: "
@@ -1285,7 +1296,9 @@ def format_live_reversal_confirmed(result: dict) -> str:
         f"• Agg Sell: {format_rupiah_compact(result.get('cumulative_sell_value'))}\n"
         f"• CVD / Net Aggression: {format_rupiah_signed(result.get('cumulative_delta'))}\n"
         f"• Buyer Ratio: {format_num((result.get('cumulative_buy_ratio') or 0) * 100, '%')}\n"
-        f"• New Batch Delta: {format_rupiah_signed(result.get('batch_delta'))}\n"
+        f"• Delta transaksi baru sejak cek sebelumnya: "
+        f"{format_rupiah_signed(result.get('batch_delta'))} "
+        f"({str(result.get('delta_observed_ts') or 'waktu N/A').replace('T', ' ')[:16]} WIB)\n"
         f"• Delta Flip: {delta_flip}\n"
         f"• Selling Absorption: {absorption}\n"
         f"• Bid Dominance: {format_num(result.get('bid_percent'), '%')}\n"
