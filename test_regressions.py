@@ -24,12 +24,13 @@ from scanner.scoring import _gte as scoring_gte
 from main import (
     should_run_filter2_fallback,
     format_alert,
+    format_live_reversal_confirmed,
     format_market_cap,
     format_rupiah_compact,
     format_rupiah_signed,
     rank_top_n_candidates,
 )
-from scanner.tradeflow import classify_aggression_trend
+from scanner.tradeflow import build_tradeflow_layers, classify_aggression_trend
 from scanner.quality import build_quality_metrics, classify_selling_absorption
 from scanner.liquidity_observer import (
     dynamic_liquidity_threshold,
@@ -188,6 +189,21 @@ def test_tradeflow_aggressive_values_and_trend() -> None:
         flat_tolerance_pct=5,
     )
     assert falling["aggression_trend"] == "FALLING", falling
+
+
+    layers = build_tradeflow_layers(
+        {"net_aggression_value": 1_000_000},
+        [
+            {"ts": "2026-11-02T10:00:00+07:00", "net_aggression_value": -500_000},
+            {"ts": "2026-11-02T10:05:00+07:00", "net_aggression_value": 1_000_000},
+        ],
+    )
+    assert layers["latest_delta_value"] == 1_000_000
+    assert layers["latest_delta_ts"] == "2026-11-02T10:05:00+07:00"
+    assert layers["latest_delta_moment"] == "BERBALIK_BELI"
+    missing = build_tradeflow_layers({}, [])
+    assert missing["latest_delta_value"] is None
+    assert missing["latest_delta_moment"] == "DATA_BELUM_CUKUP"
 
 
 def test_pullback_reversal_entry_plan_uses_idx_ticks() -> None:
@@ -476,6 +492,9 @@ def test_tradeflow_replaces_golden_pocket_in_telegram() -> None:
             "aggressive_sell_value": 500_000_000,
             "net_aggression_value": 1_500_000_000,
             "aggression_trend": "RISING",
+            "latest_delta_value": -250_000_000,
+            "latest_delta_ts": "2026-11-02T10:05:00+07:00",
+            "latest_delta_moment": "BERBALIK_JUAL",
             "selling_absorption": "CONFIRMED",
             "transaction_value_ma50": 8_000_000_000,
             "anti_falling_knife_pass": True,
@@ -484,11 +503,22 @@ def test_tradeflow_replaces_golden_pocket_in_telegram() -> None:
         rank=1,
     )
     assert "Net Aggression" in text
+    assert "Delta snapshot terakhir: Rp -250,00 Juta (2026-11-02 10:05 WIB)" in text
+    assert "Momen delta antar snapshot: BERBALIK JUAL" in text
     assert "Aggression Trend" in text
     assert "Selling Absorption" in text
     assert "Tx Value MA50" in text
     assert "TOP #1" in text
     assert "GOLDEN POCKET" not in text
+
+
+    reversal_text = format_live_reversal_confirmed({
+        "ticker": "TEST",
+        "batch_delta": 125_000_000,
+        "delta_observed_ts": "2026-11-02T10:15:00+07:00",
+    })
+    assert "Delta transaksi baru sejak cek sebelumnya: Rp +125,00 Juta" in reversal_text
+    assert "2026-11-02 10:15 WIB" in reversal_text
 
 
 def test_dynamic_liquidity_observer_is_tiered_and_observational() -> None:
