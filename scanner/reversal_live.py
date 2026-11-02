@@ -452,6 +452,7 @@ def evaluate_live_reversal_watch(
 
     return {
         **scored,
+        "delta_observed_ts": now,
         "ticker": ticker,
         "touch_ts": touch_ts,
         "source_lane": watch.get("source_lane"),
