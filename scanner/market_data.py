@@ -278,6 +278,11 @@ def fetch_stock_history(ticker: str, length: int = 120) -> Any:
     return payload
 
 
+def load_completed_histories(tickers: list[str], before) -> dict:
+    """Read existing EOD archive only; never fetch missing history from ZAPI."""
+    return _ARCHIVE.completed_histories(tickers, before)
+
+
 def fetch_company_announcements(ticker: str, length: int = 50) -> Any:
     """Fetch IDX disclosures for one issuer via the existing ZAPI IDX proxy."""
     return _get_from_base(

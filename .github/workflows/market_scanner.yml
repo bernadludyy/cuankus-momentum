@@ -128,6 +128,7 @@ jobs:
           TOP_GAINER_POTENTIAL_ENABLED: "true"
           TOP_GAINER_POTENTIAL_COUNT: "3"
           TOP_GAINER_POTENTIAL_SEND_AFTER_HOUR: "10"
+          MACD_GC_ENABLED: "true"
           MICRO_MAX_CANDIDATES: "4"
           MICRO_MIN_PRE_SCORE: "35"
           FLOW_SCREENER_ENABLED: "false"
