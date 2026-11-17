@@ -34,6 +34,7 @@ TOP_GAINER_TARGET = "private"  # enforce private-only, ignoring stale env settin
 TOP_GAINER_POTENTIAL_ENABLED = os.getenv("TOP_GAINER_POTENTIAL_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
 TOP_GAINER_POTENTIAL_COUNT = int(os.getenv("TOP_GAINER_POTENTIAL_COUNT", "3"))
 TOP_GAINER_POTENTIAL_SEND_AFTER_HOUR = int(os.getenv("TOP_GAINER_POTENTIAL_SEND_AFTER_HOUR", "10"))
+MACD_GC_ENABLED = os.getenv("MACD_GC_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
 FORCE_RUN = os.getenv("FORCE_RUN", "false").lower() in {"1", "true", "yes", "y"}
 MICRO_MAX_CANDIDATES = int(os.getenv("MICRO_MAX_CANDIDATES", "4"))
 FLOW_SCREENER_ENABLED = os.getenv("FLOW_SCREENER_ENABLED", "true").lower() in {"1", "true", "yes", "y"}

@@ -6,6 +6,7 @@ import time
 from bot.notifier import send_telegram
 from scanner.top_gainer import NeonDailyDelivery, send_daily_top_gainers
 from scanner.top_gainer_potential import POTENTIAL_NAMESPACE, send_daily_potential
+from scanner.macd_gc import NAMESPACE as MACD_GC_NAMESPACE, run_macd_gc
 from datetime import datetime
 from scanner.ptsn_structure import build_ptsn_structure, format_ptsn_structure
 from project_fabric.observability import ObservabilityClient
@@ -29,6 +30,7 @@ from config import (
     TOP_GAINER_POTENTIAL_ENABLED,
     TOP_GAINER_POTENTIAL_COUNT,
     TOP_GAINER_POTENTIAL_SEND_AFTER_HOUR,
+    MACD_GC_ENABLED,
     PTSN_STRUCTURE_ENABLED,
     PTSN_STRUCTURE_COOLDOWN_MINUTES,
     PTSN_STRUCTURE_MAX_ALERTS_PER_CYCLE,
@@ -101,6 +103,7 @@ from scanner.market_data import (
     fetch_quote,
     get_stock_summary_row,
     fetch_stock_history,
+    load_completed_histories,
     market_cache_backend,
 )
 from scanner.market_hours import is_idx_market_window
@@ -1521,6 +1524,21 @@ def run_once() -> None:
         )
     except Exception as exc:
         print(f"[WARN] market collector stock-summary gagal: {exc}")
+
+    if MACD_GC_ENABLED and shared_market_payload is not None:
+        try:
+            macd_status = run_macd_gc(
+                shared_market_payload,
+                when=datetime.now().astimezone(),
+                history_loader=load_completed_histories,
+                sender=send_telegram,
+                store_factory=lambda code: NeonDailyDelivery(
+                    namespace=f"{MACD_GC_NAMESPACE}:{code}"),
+                max_price=MAX_ALERT_PRICE,
+            )
+            print(f"[MACD-GC-PRIVATE] {macd_status}")
+        except Exception as exc:
+            print(f"[MACD-GC-PRIVATE-WARN] {type(exc).__name__}: {str(exc)[:160]}")
 
     try:
         active_tickers = discover_active_tickers(

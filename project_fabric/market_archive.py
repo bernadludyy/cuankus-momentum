@@ -484,6 +484,53 @@ class MarketArchive:
                 rows=c.fetchall()
         return [r[0] for r in reversed(rows)]
 
+    def completed_histories(self, tickers: list[str], before: date) -> dict:
+        """One bounded read of EOD bars; latest archived summary fills history gaps."""
+        codes = sorted({x.upper().strip() for x in tickers if _CODE.fullmatch(x.upper().strip())})
+        if not codes or not self.ready:
+            return {"last_session": None, "histories": {}}
+        with self._connect() as cn, cn.cursor() as cur:
+            cur.execute("SET statement_timeout = '3s'")
+            cur.execute("""
+                WITH source AS (
+                    SELECT ticker, trade_date, high_price, low_price, close_price,
+                           volume_shares, 1 AS priority
+                    FROM project_fabric.stock_history_daily
+                    WHERE ticker = ANY(%s) AND trade_date < %s
+                      AND trade_date >= %s - interval '400 days'
+                    UNION ALL
+                    SELECT ticker, trade_date, high_price, low_price, close_price,
+                           volume_shares, 0 AS priority
+                    FROM project_fabric.stock_summary_daily
+                    WHERE ticker = ANY(%s) AND trade_date < %s
+                      AND trade_date >= %s - interval '400 days'
+                ), dedup AS (
+                    SELECT DISTINCT ON (ticker, trade_date) * FROM source
+                    ORDER BY ticker, trade_date, priority
+                ), ranked AS (
+                    SELECT *, row_number() OVER (
+                        PARTITION BY ticker ORDER BY trade_date DESC) AS n
+                    FROM dedup
+                ), latest AS (
+                    SELECT greatest(
+                        (SELECT max(trade_date) FROM project_fabric.stock_summary_daily WHERE trade_date < %s),
+                        (SELECT max(trade_date) FROM project_fabric.stock_history_daily WHERE trade_date < %s)
+                    ) AS session
+                )
+                SELECT ticker, trade_date, high_price, low_price, close_price,
+                       volume_shares, session
+                FROM ranked CROSS JOIN latest WHERE n <= 120
+                ORDER BY ticker, trade_date
+                """, (codes, before, before, codes, before, before, before, before))
+            rows = cur.fetchall()
+        histories: dict[str, list[dict]] = {}
+        for code, day, high, low, close, volume, _ in rows:
+            histories.setdefault(code, []).append({
+                "date": day.isoformat(), "high": high, "low": low,
+                "close": close, "volume": volume,
+            })
+        return {"last_session": rows[0][-1] if rows else None, "histories": histories}
+
     def latest_history_date(self, ticker: str) -> date | None:
         with self._connect() as cn:
             with cn.cursor() as c:
